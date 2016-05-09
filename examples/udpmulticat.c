@@ -81,6 +81,7 @@
 #include <upipe-modules/upipe_multicat_sink.h>
 #include <upipe-modules/upipe_udp_sink.h>
 #include <upipe-ts/upipe_ts_getpcr.h>
+#include <upipe-ts/upipe_ts_pcr_interpolator.h>
 #include <upipe-ts/upipe_ts_align.h>
 #include <upipe-dveo/upipe_dveo_asi_sink.h>
 
@@ -222,17 +223,20 @@ int main(int argc, char *argv[])
             ts_align_mgr,
             uprobe_pfx_alloc(uprobe_use(logger),
                              loglevel, "tsalign"));
-    //upipe_set_output_size(upipe_ts_align, 188);
-    //upipe_release(upipe_ts_align);
 
     struct upipe_mgr *ts_getpcr_mgr = upipe_ts_getpcr_mgr_alloc();
-    //struct upipe_mgr *upipe_udpsink_mgr = upipe_udpsink_mgr_alloc();
-    struct upipe *upipe_getpcr = upipe_void_alloc_output(upipe_ts_align,
+    struct upipe *upipe_ts_getpcr = upipe_void_alloc_output(upipe_ts_align,
             ts_getpcr_mgr,
             uprobe_pfx_alloc(uprobe_use(logger),
                              loglevel, "getpcr"));
 
-    upipe_set_output(upipe_getpcr, upipe_asi_sink);
+    struct upipe_mgr *ts_pcr_interpolator_mgr = upipe_ts_pcr_interpolator_mgr_alloc();
+    struct upipe *upipe_ts_pcr_interpolator = upipe_void_alloc_output(upipe_ts_getpcr,
+            ts_pcr_interpolator_mgr,
+            uprobe_pfx_alloc(uprobe_use(logger),
+                             loglevel, "pcr_interpolator"));
+
+    upipe_set_output(upipe_ts_pcr_interpolator, upipe_asi_sink);
     upipe_release(upipe_asi_sink);
 
     /* fire loop ! */
