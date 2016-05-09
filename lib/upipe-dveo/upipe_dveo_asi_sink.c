@@ -356,7 +356,6 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         ssize_t ret = write(fd, ts, n);
 
         if (unlikely(ret == -1)) {
-            upipe_err_va(upipe, "write: errno (%m)");
             switch (errno) {
                 case EINTR:
                     continue;
@@ -367,6 +366,7 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
 					upipe_dveo_asi_sink_poll(upipe);
                     return false;
                 default:
+                    upipe_err_va(upipe, "write: %m");
                     break;
             }
             upipe_warn_va(upipe, "write error to device %d (%m)", upipe_dveo_asi_sink->card_idx);
