@@ -121,7 +121,7 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
 {
     struct upipe_ts_getpcr *upipe_ts_getpcr = upipe_ts_getpcr_from_upipe(upipe);
 
-    bool discontinuity = uref_flow_get_discontinuity(uref);
+    bool discontinuity = uref_flow_get_discontinuity(uref) == UBASE_ERR_NONE;
 
     /*  */
     if (upipe_ts_getpcr->req_pcr_pid == 0xffff && upipe_ts_getpcr->new_pcr_pid_count > 20) {

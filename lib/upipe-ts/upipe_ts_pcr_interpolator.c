@@ -163,7 +163,7 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
                 uint64_t prog = upipe_ts_pcr_interpolator->last_pcr
                     + upipe_ts_pcr_interpolator->pcr_offset;
                 uref_clock_set_cr_prog(uref, prog);
-                upipe_throw_clock_ref(upipe, uref, prog, uref_flow_get_discontinuity(uref));
+                upipe_throw_clock_ref(upipe, uref, prog, uref_flow_get_discontinuity(uref) == UBASE_ERR_NONE);
             }
             upipe_ts_pcr_interpolator->pcr_delta = delta;
             upipe_ts_pcr_interpolator->packets = 0;
