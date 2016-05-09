@@ -58,6 +58,7 @@
 #include <upipe/uprobe_upump_mgr.h>
 #include <upipe/uprobe_uclock.h>
 #include <upipe/uprobe_ubuf_mem.h>
+#include <upipe/uprobe_dejitter.h>
 #include <upipe/uclock.h>
 #include <upipe/uclock_std.h>
 #include <upipe/umem.h>
@@ -170,7 +171,11 @@ int main(int argc, char *argv[])
     uprobe_init(&uprobe, catch, NULL);
     struct uprobe *logger = uprobe_stdio_alloc(&uprobe, stdout, loglevel);
     assert(logger != NULL);
-    logger = uprobe_uref_mgr_alloc(logger, uref_mgr);
+    struct uprobe *uprobe_dejitter = uprobe_dejitter_alloc(logger, true, 0);
+    assert(uprobe_dejitter != NULL);
+
+    logger = uprobe_uref_mgr_alloc(uprobe_dejitter, uref_mgr);
+
     assert(logger != NULL);
     logger = uprobe_upump_mgr_alloc(logger, upump_mgr);
     assert(logger != NULL);
