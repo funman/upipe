@@ -21,7 +21,7 @@
  */
 
 /** @file
- * @short Upipe module decapsulating (removing TS header) TS packets
+ * @short Upipe module extracting PCR from TS packets
  */
 
 #include <upipe/ubase.h>
@@ -48,14 +48,6 @@
 
 #include <bitstream/mpeg/ts.h>
 
-/** 2^33 (max resolution of PCR, PTS and DTS) */
-#define POW2_33 UINT64_C(8589934592)
-/** max resolution of PCR, PTS and DTS */
-#define TS_CLOCK_MAX (POW2_33 * UCLOCK_FREQ / 27000000)
-/** max interval between PCRs (ISO/IEC 13818-1 2.7.2) - could be 100 ms but
- * allow higher tolerance */
- #define MAX_PCR_INTERVAL (UCLOCK_FREQ / 2)
-
 /** we only accept TS packets */
 #define EXPECTED_FLOW_DEF "block.mpegts."
 
@@ -81,24 +73,6 @@ struct upipe_ts_getpcr {
 
     /** new PCR PID count */
     uint8_t new_pcr_pid_count;
-
-    /** previous PCR value */
-    uint64_t last_pcr;
-
-    /** offset between MPEG pcrs and Upipe pcrs */
-    int64_t pcr_offset;
-
-    /** highest Upipe pcr given to an uref */
-    uint64_t pcr_highest;
-
-    /** number of TS packets since last PCR */
-    unsigned int packets;
-
-    /** number of TS packets between the last 2 PCRs */
-    unsigned int pcr_packets;
-
-    /** delta between the last 2 PCRs */
-    uint64_t pcr_delta;
 
     /** public upipe structure */
     struct upipe upipe;
@@ -131,12 +105,6 @@ static struct upipe *upipe_ts_getpcr_alloc(struct upipe_mgr *mgr,
     upipe_ts_getpcr_init_output(upipe);
     upipe_ts_getpcr->last_pcr_pid = 0xffff;
     upipe_ts_getpcr->req_pcr_pid = 0xffff;
-    upipe_ts_getpcr->last_pcr = 0;
-    upipe_ts_getpcr->pcr_offset = 0;
-    upipe_ts_getpcr->pcr_highest = TS_CLOCK_MAX;
-    upipe_ts_getpcr->packets = 0;
-    upipe_ts_getpcr->pcr_packets = 0;
-    upipe_ts_getpcr->pcr_delta = 0;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -156,8 +124,10 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     bool discontinuity = uref_flow_get_discontinuity(uref);
 
     /*  */
-    if (upipe_ts_getpcr->req_pcr_pid == 0xffff && upipe_ts_getpcr->new_pcr_pid_count > 20)
+    if (upipe_ts_getpcr->req_pcr_pid == 0xffff && upipe_ts_getpcr->new_pcr_pid_count > 20) {
+        uref_flow_set_discontinuity(uref);
         discontinuity = 1;
+    }
 
     if (discontinuity) {
         upipe_ts_getpcr->last_pcr_pid = 0xffff;
@@ -172,17 +142,14 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
         return;
     }
 
-    upipe_ts_getpcr->packets++;
-
     bool has_payload = ts_has_payload(ts_header);
     bool has_adaptation = ts_has_adaptation(ts_header);
     uint16_t pid = ts_get_pid(ts_header);
-    uint64_t pcr_orig = UINT64_MAX;
 
     UBASE_FATAL(upipe, uref_block_peek_unmap(uref, 0, buffer, ts_header))
 
     if (likely(!has_adaptation))
-        goto no_pcr;
+        goto end;
 
     uint8_t af_length;
     if (unlikely(!ubase_check(uref_block_extract(uref, TS_HEADER_SIZE, 1, &af_length)))) {
@@ -194,10 +161,11 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     if (unlikely((!has_payload && af_length != 183) ||
                 (has_payload && af_length >= 183))) {
         upipe_warn_va(upipe, "invalid adaptation field received (length %d)", af_length);
+        goto end;
     }
 
     if (!af_length)
-        goto no_pcr;
+        goto end;
 
     uint8_t af_header;
     if (unlikely(!ubase_check(uref_block_extract(uref, TS_HEADER_SIZE + 1, 1, &af_header)))) {
@@ -207,100 +175,39 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     }
 
     if (!tsaf_has_pcr(&af_header - 1 - TS_HEADER_SIZE))
-        goto no_pcr;
+        goto end;
 
     if (upipe_ts_getpcr->req_pcr_pid == 0xffff)
         upipe_ts_getpcr->req_pcr_pid = pid;
 
-    if (!(upipe_ts_getpcr->req_pcr_pid != 0xffff && pid == upipe_ts_getpcr->req_pcr_pid) &&
-        !(upipe_ts_getpcr->last_pcr_pid != 0xffff || upipe_ts_getpcr->last_pcr_pid == pid))
-        goto not_found_pcr;
-
-    uint8_t buffer_af[TS_HEADER_SIZE_PCR - TS_HEADER_SIZE_AF];
-    const uint8_t *pcr = uref_block_peek(uref, TS_HEADER_SIZE + 2,
-            TS_HEADER_SIZE_PCR - TS_HEADER_SIZE_AF, buffer_af);
-    if (unlikely(pcr == NULL)) {
-        uref_free(uref);
-        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
-        return;
-    }
-
-    pcr_orig = (tsaf_get_pcr(pcr - TS_HEADER_SIZE_AF) * 300 +
-            tsaf_get_pcrext(pcr - TS_HEADER_SIZE_AF));
-    pcr_orig *= UCLOCK_FREQ / 27000000;
-    UBASE_FATAL(upipe, uref_block_peek_unmap(uref, 2, buffer_af, pcr))
-
-    uref_clock_set_ref(uref);
-
-    /* handle 2^33 wrap-arounds */
-    uint64_t delta = (TS_CLOCK_MAX + pcr_orig -
-         (upipe_ts_getpcr->last_pcr % TS_CLOCK_MAX)) % TS_CLOCK_MAX;
-
-    if (!upipe_ts_getpcr->last_pcr || delta <= MAX_PCR_INTERVAL) {
-        upipe_ts_getpcr->last_pcr += delta;
-        upipe_ts_getpcr->pcr_highest = upipe_ts_getpcr->last_pcr;
-
-        upipe_dbg_va(upipe,
-                "pcr_orig %"PRId64" offset %"PRId64" bitrate %"PRId64" bps",
-                pcr_orig, pcr_orig - upipe_ts_getpcr->last_pcr, 
-                INT64_C(27000000) * upipe_ts_getpcr->packets * TS_SIZE * 8 / delta);
-
-        if (upipe_ts_getpcr->pcr_delta) {
-            upipe_ts_getpcr->pcr_packets = upipe_ts_getpcr->packets;
-            uref_clock_set_cr_prog(uref, upipe_ts_getpcr->last_pcr + upipe_ts_getpcr->pcr_offset);
+    if (pid == upipe_ts_getpcr->req_pcr_pid || upipe_ts_getpcr->last_pcr_pid != 0xffff) {
+        uint8_t buffer_af[TS_HEADER_SIZE_PCR - TS_HEADER_SIZE_AF];
+        const uint8_t *pcr = uref_block_peek(uref, TS_HEADER_SIZE + 2,
+                TS_HEADER_SIZE_PCR - TS_HEADER_SIZE_AF, buffer_af);
+        if (unlikely(pcr == NULL)) {
+            uref_free(uref);
+            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+            return;
         }
-        upipe_ts_getpcr->pcr_delta = delta;
-        upipe_ts_getpcr->packets = 0;
+
+        uint64_t pcr_orig = (tsaf_get_pcr(pcr - TS_HEADER_SIZE_AF) * 300 +
+                tsaf_get_pcrext(pcr - TS_HEADER_SIZE_AF));
+        pcr_orig *= UCLOCK_FREQ / 27000000;
+
+        UBASE_FATAL(upipe, uref_block_peek_unmap(uref, 2, buffer_af, pcr))
 
         uref_clock_set_cr_orig(uref, pcr_orig);
+        uref_clock_set_ref(uref);
 
-        upipe_throw_clock_ref(upipe, uref, 
-                upipe_ts_getpcr->last_pcr + upipe_ts_getpcr->pcr_offset,
-                discontinuity ? 1 : 0);
-
-    } else {
-        upipe_ts_getpcr->pcr_offset = upipe_ts_getpcr->pcr_highest - pcr_orig +
-            upipe_ts_getpcr->pcr_delta / upipe_ts_getpcr->pcr_packets;
-        upipe_warn_va(upipe, "DISCONTINUITY: pcr_orig %"PRId64" delta %"PRId64
-                " new pcr_offset %"PRId64,
-                pcr_orig, delta, upipe_ts_getpcr->pcr_offset);
-        upipe_ts_getpcr->last_pcr = pcr_orig;
-        pcr_orig = UINT64_MAX;
-        upipe_ts_getpcr->packets = 0;
+        upipe_ts_getpcr->new_pcr_pid_count = 0;
     }
 
-    upipe_ts_getpcr->new_pcr_pid_count = 0;
-
-not_found_pcr:
-    if (upipe_ts_getpcr->req_pcr_pid == 0xffff && upipe_ts_getpcr->last_pcr_pid != pid) {
+    if (upipe_ts_getpcr->req_pcr_pid == 0xffff && upipe_ts_getpcr->last_pcr_pid != pid)
         upipe_ts_getpcr->new_pcr_pid_count++;
-    }
 
     upipe_ts_getpcr->last_pcr_pid = pid;
 
-no_pcr:
-    if (pcr_orig == UINT64_MAX && upipe_ts_getpcr->pcr_packets) {
-        uint64_t offset = upipe_ts_getpcr->pcr_delta *
-                    upipe_ts_getpcr->packets / upipe_ts_getpcr->pcr_packets;
-        upipe_notice_va(upipe, "PCR offset %"PRId64" %u packets %u pcr packets", offset,
-                    upipe_ts_getpcr->packets, upipe_ts_getpcr->pcr_packets);
-
-        uint64_t prog = upipe_ts_getpcr->last_pcr + upipe_ts_getpcr->pcr_offset + offset;
-        uref_clock_set_cr_orig(uref, upipe_ts_getpcr->last_pcr + offset);
-        uref_clock_set_cr_prog(uref, prog);
-
-        upipe_ts_getpcr->pcr_highest = prog;
-    }
-
-    static uint64_t old_prog;
-    uint64_t prog;
-    uref_clock_get_cr_prog(uref, &prog);
-    upipe_notice_va(upipe, "CR %"PRId64" (+%"PRId64")", prog, prog - old_prog);
-    old_prog = prog;
-
-    if (unlikely(discontinuity))
-        uref_flow_set_discontinuity(uref);
-
+end:
     upipe_ts_getpcr_output(upipe, uref, upump_p);
 }
 
