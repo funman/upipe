@@ -231,9 +231,6 @@ static int upipe_ts_getpcr_set_flow_def(struct upipe *upipe,
         upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
         return UBASE_ERR_ALLOC;
     }
-    if (unlikely(!ubase_check(uref_flow_set_def_va(flow_def_dup, "block.mpegts.%s",
-                                       def + strlen(EXPECTED_FLOW_DEF)))))
-        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
     upipe_ts_getpcr_store_flow_def(upipe, flow_def_dup);
     return UBASE_ERR_NONE;
 }

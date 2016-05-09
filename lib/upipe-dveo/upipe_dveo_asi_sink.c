@@ -456,7 +456,7 @@ static int upipe_dveo_asi_sink_set_flow_def(struct upipe *upipe, struct uref *fl
 {
     if (flow_def == NULL)
         return UBASE_ERR_INVALID;
-    UBASE_RETURN(uref_flow_match_def(flow_def, "block.mpegtsaligned."))
+    UBASE_RETURN(uref_flow_match_def(flow_def, "block.mpegts."))
     flow_def = uref_dup(flow_def);
     UBASE_ALLOC_RETURN(flow_def)
     upipe_input(upipe, flow_def, NULL);
