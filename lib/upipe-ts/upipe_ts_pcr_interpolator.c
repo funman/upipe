@@ -188,6 +188,7 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
         //uref_clock_set_cr_prog(uref, prog);
         //uref_clock_set_ref(uref);
         uref_clock_set_date_prog(uref, prog, UREF_DATE_CR);
+        upipe_throw_clock_ts(upipe, uref);
 
         upipe_ts_pcr_interpolator->pcr_highest = prog;
     }
