@@ -21,7 +21,7 @@
  */
 
 /** @file
- * @short Upipe module interpolating timestamps and PCRs
+ * @short Upipe module interpolating timestamps from PCRs
  */
 
 #include <upipe/ubase.h>
@@ -74,12 +74,6 @@ struct upipe_ts_pcr_interpolator {
     /** previous PCR value */
     uint64_t last_pcr;
 
-    /** offset between MPEG pcrs and Upipe pcrs */
-    int64_t pcr_offset;
-
-    /** highest Upipe pcr given to an uref */
-    uint64_t pcr_highest;
-
     /** number of TS packets since last PCR */
     unsigned int packets;
 
@@ -119,8 +113,6 @@ static struct upipe *upipe_ts_pcr_interpolator_alloc(struct upipe_mgr *mgr,
     upipe_ts_pcr_interpolator_init_urefcount(upipe);
     upipe_ts_pcr_interpolator_init_output(upipe);
     upipe_ts_pcr_interpolator->last_pcr = 0;
-    upipe_ts_pcr_interpolator->pcr_offset = 0;
-    upipe_ts_pcr_interpolator->pcr_highest = TS_CLOCK_MAX;
     upipe_ts_pcr_interpolator->packets = 0;
     upipe_ts_pcr_interpolator->pcr_packets = 0;
     upipe_ts_pcr_interpolator->pcr_delta = 0;
@@ -141,64 +133,44 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
     struct upipe_ts_pcr_interpolator *upipe_ts_pcr_interpolator = upipe_ts_pcr_interpolator_from_upipe(upipe);
     upipe_ts_pcr_interpolator->packets++;
 
-    uint64_t pcr_orig = 0;
-    uref_clock_get_cr_orig(uref, &pcr_orig);
+    uint64_t pcr_prog = 0;
+    uref_clock_get_cr_prog(uref, &pcr_prog);
 
-    if (pcr_orig) {
-        /* handle 2^33 wrap-arounds */
-        uint64_t delta = (TS_CLOCK_MAX + pcr_orig -
-                (upipe_ts_pcr_interpolator->last_pcr % TS_CLOCK_MAX)) % TS_CLOCK_MAX;
+    if (pcr_prog) {
+        uint64_t delta = pcr_prog - upipe_ts_pcr_interpolator->last_pcr;
+        upipe_ts_pcr_interpolator->last_pcr = pcr_prog;
 
-        if (!upipe_ts_pcr_interpolator->last_pcr || delta <= MAX_PCR_INTERVAL) {
-            upipe_ts_pcr_interpolator->last_pcr += delta;
-            upipe_ts_pcr_interpolator->pcr_highest = upipe_ts_pcr_interpolator->last_pcr;
+        upipe_dbg_va(upipe,
+                "pcr_prog %"PRId64" offset %"PRId64" bitrate %"PRId64" bps",
+                pcr_prog, delta,
+                INT64_C(27000000) * upipe_ts_pcr_interpolator->packets * 188 * 8 / delta);
 
-            upipe_dbg_va(upipe,
-                    "pcr_orig %"PRId64" offset %"PRId64" bitrate %"PRId64" bps",
-                    pcr_orig, pcr_orig - upipe_ts_pcr_interpolator->last_pcr, 
-                    INT64_C(27000000) * upipe_ts_pcr_interpolator->packets * 188 * 8 / delta);
+        if (upipe_ts_pcr_interpolator->pcr_delta)
+            upipe_ts_pcr_interpolator->pcr_packets = upipe_ts_pcr_interpolator->packets;
 
-            if (upipe_ts_pcr_interpolator->pcr_delta) {
-                upipe_ts_pcr_interpolator->pcr_packets = upipe_ts_pcr_interpolator->packets;
-                uint64_t prog = upipe_ts_pcr_interpolator->last_pcr
-                    + upipe_ts_pcr_interpolator->pcr_offset;
-                uref_clock_set_cr_prog(uref, prog);
-                upipe_throw_clock_ref(upipe, uref, prog, uref_flow_get_discontinuity(uref) == UBASE_ERR_NONE);
-            }
-            upipe_ts_pcr_interpolator->pcr_delta = delta;
-            upipe_ts_pcr_interpolator->packets = 0;
-
-        } else {
-            upipe_ts_pcr_interpolator->pcr_offset = upipe_ts_pcr_interpolator->pcr_highest - pcr_orig +
-                upipe_ts_pcr_interpolator->pcr_delta / upipe_ts_pcr_interpolator->pcr_packets;
-            upipe_warn_va(upipe, "DISCONTINUITY: pcr_orig %"PRId64" delta %"PRId64
-                    " new pcr_offset %"PRId64,
-                    pcr_orig, delta, upipe_ts_pcr_interpolator->pcr_offset);
-            upipe_ts_pcr_interpolator->last_pcr = pcr_orig;
-            pcr_orig = UINT64_MAX;
-            upipe_ts_pcr_interpolator->packets = 0;
-        }
+        upipe_ts_pcr_interpolator->pcr_delta = delta;
+        upipe_ts_pcr_interpolator->packets = 0;
     } else if (upipe_ts_pcr_interpolator->pcr_packets) {
         uint64_t offset = upipe_ts_pcr_interpolator->pcr_delta *
                     upipe_ts_pcr_interpolator->packets / upipe_ts_pcr_interpolator->pcr_packets;
-        upipe_notice_va(upipe, "PCR offset %"PRId64" %u packets %u pcr packets", offset,
-                    upipe_ts_pcr_interpolator->packets, upipe_ts_pcr_interpolator->pcr_packets);
-
-        uint64_t prog = upipe_ts_pcr_interpolator->last_pcr + upipe_ts_pcr_interpolator->pcr_offset + offset;
-        //uref_clock_set_cr_prog(uref, prog);
-        //uref_clock_set_ref(uref);
+        uint64_t prog = upipe_ts_pcr_interpolator->last_pcr + offset;
         uref_clock_set_date_prog(uref, prog, UREF_DATE_CR);
         upipe_throw_clock_ts(upipe, uref);
-
-        upipe_ts_pcr_interpolator->pcr_highest = prog;
     }
 
-#if 0
+#if 1
     static uint64_t old_prog;
+    uint64_t orig = 0;
+    uref_clock_get_cr_orig(uref, &orig);
     uint64_t prog = 0;
     uref_clock_get_cr_prog(uref, &prog);
-    upipe_notice_va(upipe, "CR %"PRId64" (+%"PRId64")", prog, prog - old_prog);
-    old_prog = prog;
+    int t;
+    if (prog == 0)
+        uref_clock_get_date_prog(uref, &prog, &t);
+    if (orig || prog != -1)
+    upipe_notice_va(upipe, "CR ORIG %"PRId64" %"PRId64" (+%"PRId64")", orig, prog, prog - old_prog);
+    if (prog != -1)
+        old_prog = prog;
 #endif
 
     upipe_ts_pcr_interpolator_output(upipe, uref, upump_p);
