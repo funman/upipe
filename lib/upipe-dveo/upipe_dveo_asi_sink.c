@@ -289,21 +289,18 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
             cr_prog, cr_orig, cr_sys);
     }
 
-    uint64_t now = uclock_now(&upipe_dveo_asi_sink->uclock.uclock);
-    //upipe_dbg_va(upipe, "CLOCK %"PRId64, now);
-
     // TODO
     //cr_sys += upipe_dveo_asi_sink->latency;
 
 
-    /* Use cr_prog as 63-bits timestamp */
+    /* Use cr_sys as 63-bits timestamp */
 
     union {
         uint8_t timestamp[8];
         uint64_t pcr;
     } timestamp;
 
-    timestamp.pcr = cr_prog;
+    timestamp.pcr = cr_sys;
     if (!cr_prog) {
         uref_free(uref);
         upipe_warn(upipe, "prog not set, not writing anything");
