@@ -111,6 +111,9 @@ struct upipe_dveo_asi_sink {
     /** first timestamp */
     bool first_timestamp;
 
+    /** last PCR */
+    uint64_t last_cr;
+
     /** public upipe structure */
     struct upipe upipe;
 };
@@ -239,6 +242,7 @@ static struct upipe *upipe_dveo_asi_sink_alloc(struct upipe_mgr *mgr,
     upipe_dveo_asi_sink->latency = 0;
     upipe_dveo_asi_sink->fd = -1;
     upipe_dveo_asi_sink->card_idx = 0;
+    upipe_dveo_asi_sink->last_cr = 0;
     upipe_dveo_asi_sink->first_timestamp = true;
     upipe_throw_ready(upipe);
     return upipe;
@@ -292,6 +296,18 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
     // TODO
     //cr_sys += upipe_dveo_asi_sink->latency;
 
+    if (cr_prog && cr_prog != -1) {
+        upipe_dveo_asi_sink->last_cr = cr_prog;
+    } else {
+        int type;
+        uref_clock_get_date_prog(uref, &cr_prog, &type);
+        struct urational rate = {0, 0};
+        uref_clock_get_rate(uref, &rate);
+        if (!rate.num || !rate.den)
+            rate.num = rate.den = 1;
+        cr_prog = upipe_dveo_asi_sink->last_cr +
+            (cr_prog - upipe_dveo_asi_sink->last_cr) * rate.num / rate.den;
+    }
 
     /* Use cr_sys as 63-bits timestamp */
 
@@ -300,8 +316,8 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         uint64_t pcr;
     } timestamp;
 
-    timestamp.pcr = cr_sys;
-    if (!cr_prog) {
+    timestamp.pcr = cr_prog;
+    if (!cr_prog || cr_prog == -1) {
         uref_free(uref);
         upipe_warn(upipe, "prog not set, not writing anything");
         return true;
