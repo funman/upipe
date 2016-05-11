@@ -229,7 +229,6 @@ int main(int argc, char *argv[])
             ts_align_mgr,
             uprobe_pfx_alloc(uprobe_use(logger),
                              loglevel, "tsalign"));
-    upipe_release(upipe_rtpsrc);
 
     struct upipe_mgr *ts_getpcr_mgr = upipe_ts_getpcr_mgr_alloc();
     struct upipe *upipe_ts_getpcr = upipe_void_alloc_output(upipe_ts_align,
