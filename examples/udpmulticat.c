@@ -202,6 +202,7 @@ int main(int argc, char *argv[])
             uprobe_pfx_alloc(uprobe_use(logger),
                              loglevel, "rtp source"));
 
+    upipe_mgr_release(upipe_rtpsrc_mgr);
     if (!ubase_check(upipe_set_uri(upipe_rtpsrc, srcpath))) {
         return EXIT_FAILURE;
     }
@@ -228,20 +229,22 @@ int main(int argc, char *argv[])
             ts_align_mgr,
             uprobe_pfx_alloc(uprobe_use(logger),
                              loglevel, "tsalign"));
+    upipe_release(upipe_rtpsrc);
 
     struct upipe_mgr *ts_getpcr_mgr = upipe_ts_getpcr_mgr_alloc();
     struct upipe *upipe_ts_getpcr = upipe_void_alloc_output(upipe_ts_align,
             ts_getpcr_mgr,
             uprobe_pfx_alloc(uprobe_use(logger),
                              loglevel, "getpcr"));
-
+    upipe_release(upipe_ts_align);
     struct upipe_mgr *ts_pcr_interpolator_mgr = upipe_ts_pcr_interpolator_mgr_alloc();
     struct upipe *upipe_ts_pcr_interpolator = upipe_void_alloc_output(upipe_ts_getpcr,
             ts_pcr_interpolator_mgr,
             uprobe_pfx_alloc(uprobe_use(logger),
                              loglevel, "pcr_interpolator"));
-
+    upipe_release(upipe_ts_getpcr);
     upipe_set_output(upipe_ts_pcr_interpolator, upipe_asi_sink);
+    upipe_release(upipe_ts_pcr_interpolator);
     upipe_release(upipe_asi_sink);
 
     /* fire loop ! */
