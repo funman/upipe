@@ -182,7 +182,16 @@ int main(int argc, char *argv[])
     logger = uprobe_ubuf_mem_alloc(logger, umem_mgr, UBUF_POOL_DEPTH,
                                    UBUF_POOL_DEPTH);
     assert(logger != NULL);
-    struct uclock *uclock = NULL;//;
+    struct uclock *uclock = NULL;
+#if 0
+    struct upipe_mgr *asi_sink_mgr = upipe_fsink_mgr_alloc();
+
+    struct upipe *upipe_asi_sink = upipe_void_alloc(asi_sink_mgr,
+            uprobe_pfx_alloc(logger, loglevel, "fsink"));
+    upipe_fsink_set_path(upipe_asi_sink, "/dev/null", UPIPE_FSINK_NONE);
+
+    uclock = uclock_std_alloc(UCLOCK_FLAG_REALTIME);
+#else
     struct upipe_mgr *asi_sink_mgr = upipe_dveo_asi_sink_mgr_alloc();
 
     struct upipe *upipe_asi_sink = upipe_void_alloc(asi_sink_mgr,
@@ -192,6 +201,7 @@ int main(int argc, char *argv[])
 
     if (!ubase_check(upipe_dveo_asi_sink_get_uclock(upipe_asi_sink, &uclock)))
         return EXIT_FAILURE;
+#endif
 
     logger = uprobe_uclock_alloc(logger, uclock);
     assert(logger != NULL);
