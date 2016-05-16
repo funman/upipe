@@ -460,7 +460,8 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         upipe_err_va(upipe, "ioctl TXGETBUFLEVEL failed (%m)");
     else {
         static int old;
-        if ((val - 3) >  old || (val+3) < old) {
+#define MARGIN 1
+        if ((val - MARGIN) >  old || (val + MARGIN) < old) {
             float secs = (float)val * 6 * 196 * 8 / 10500000;
             upipe_notice_va(upipe, "buf level %d -> %.2fs", val, secs);
             old = val;
