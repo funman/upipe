@@ -41,6 +41,7 @@
 #include <upipe-ts/upipe_ts_getpcr.h>
 
 #include <stdlib.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdarg.h>
 #include <string.h>
@@ -88,6 +89,9 @@ struct upipe_ts_getpcr {
     /** offset between MPEG pcrs and Upipe pcrs */
     uint64_t pcr_offset;
 
+    /** last continuity counter on PCR */
+    unsigned pcr_cc;
+
     /** public upipe structure */
     struct upipe upipe;
 };
@@ -121,6 +125,7 @@ static struct upipe *upipe_ts_getpcr_alloc(struct upipe_mgr *mgr,
     upipe_ts_getpcr->req_pcr_pid = 0xffff;
     upipe_ts_getpcr->last_pcr = UINT64_MAX;
     upipe_ts_getpcr->pcr_offset = 0;
+    upipe_ts_getpcr->pcr_cc = UINT_MAX;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -174,6 +179,7 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
         upipe_ts_getpcr->new_pcr_pid_count = 0;
         upipe_ts_getpcr->pcr_offset = 0;
         upipe_ts_getpcr->last_pcr = UINT64_MAX;
+        upipe_ts_getpcr->pcr_cc = UINT_MAX;
     }
 
     /* Read TS buffer */
@@ -188,6 +194,7 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     bool has_payload = ts_has_payload(ts_header);
     bool has_adaptation = ts_has_adaptation(ts_header);
     uint16_t pid = ts_get_pid(ts_header);
+    uint8_t cc = ts_get_cc(ts_header);
 
     UBASE_FATAL(upipe, uref_block_peek_unmap(uref, 0, buffer, ts_header))
 
@@ -247,7 +254,16 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     uint64_t delta = (TS_CLOCK_MAX + pcr_orig - upipe_ts_getpcr->last_pcr)
         % TS_CLOCK_MAX;
 
-    if (unlikely(!start && delta > MAX_PCR_INTERVAL)) {
+    if (unlikely(upipe_ts_getpcr->pcr_cc == UINT_MAX))
+        upipe_ts_getpcr->pcr_cc = (cc + 16 - 1) & 0xf;
+
+    if (cc != ((upipe_ts_getpcr->pcr_cc + 1) & 0xf)) {
+        upipe_warn_va(upipe, "PCR discontinuity (cc %u -> %u)",
+            upipe_ts_getpcr->pcr_cc, cc);
+        discontinuity = 1;
+    }
+
+    if (unlikely(discontinuity || (!start && delta > MAX_PCR_INTERVAL))) {
         discontinuity = 1;
         uref_flow_set_discontinuity(uref);
         upipe_ts_getpcr->pcr_offset = 0; /* reset get_pcr state */
