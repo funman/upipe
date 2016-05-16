@@ -83,6 +83,9 @@ struct upipe_ts_pcr_interpolator {
     /** delta between the last 2 PCRs */
     uint64_t pcr_delta;
 
+    /** if next packet output should show discontinuity */
+    bool discontinuity;
+
     /** public upipe structure */
     struct upipe upipe;
 };
@@ -116,6 +119,7 @@ static struct upipe *upipe_ts_pcr_interpolator_alloc(struct upipe_mgr *mgr,
     upipe_ts_pcr_interpolator->packets = 0;
     upipe_ts_pcr_interpolator->pcr_packets = 0;
     upipe_ts_pcr_interpolator->pcr_delta = 0;
+    upipe_ts_pcr_interpolator->discontinuity = true;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -137,6 +141,7 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
         upipe_ts_pcr_interpolator->packets = 0;
         upipe_ts_pcr_interpolator->pcr_packets = 0;
         upipe_ts_pcr_interpolator->pcr_delta = 0;
+        upipe_ts_pcr_interpolator->discontinuity = true;
         upipe_notice_va(upipe, "Clearing state");
     }
 
@@ -168,6 +173,11 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
         upipe_throw_clock_ts(upipe, uref);
     }
 
+    if (!upipe_ts_pcr_interpolator->pcr_packets) {
+        uref_free(uref);
+        return;
+    }
+
 #if 1
     static uint64_t old_prog;
     uint64_t orig = 0;
@@ -185,6 +195,10 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
         old_prog = prog;
 #endif
 
+    if (upipe_ts_pcr_interpolator->discontinuity) {
+        uref_flow_set_discontinuity(uref);
+        upipe_ts_pcr_interpolator->discontinuity = false;
+    }
     upipe_ts_pcr_interpolator_output(upipe, uref, upump_p);
 }
 
