@@ -169,7 +169,7 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
     int t;
     if (prog == 0)
         uref_clock_get_date_prog(uref, &prog, &t);
-    if (orig || prog != -1)
+    if (0) if (orig || prog != -1)
         upipe_dbg_va(upipe, "CR ORIG %"PRId64" PROG %"PRId64" (+%"PRId64") SYS %"PRId64"", orig, prog, prog - old_prog, sys);
     if (prog != -1)
         old_prog = prog;
