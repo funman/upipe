@@ -336,7 +336,7 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         if (upipe_dveo_asi_sink->first_timestamp) {
             upipe_dveo_asi_sink->first_timestamp = false;
             timestamp.pcr |= 1LLU << 63; /* Set MSB = Set the counter */
-            timestamp.pcr -= 27000000; /* add 1s latency */
+            timestamp.pcr -= 2700000; /* add 100ms latency */
             reset_first_timestamp = true; /* Make sure we set the counter */
         }
 
@@ -569,17 +569,6 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
     static const char dev_fmt[] = "/dev/asitx%u";
     static const char sys_fmt[] = "/sys/class/asi/asitx%u/%s";
     static const char dvbm_sys_fmt[] = "/sys/class/dvbm/%u/%s";
-    int granularity;
-
-    snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "granularity");
-    if (util_read(sys, buf, 1) < 0) {
-        upipe_err_va(upipe, "Couldn't read granularity");
-        return UBASE_ERR_EXTERNAL;
-    }
-
-    buf[1] = '\0';
-    granularity = atoi(buf);
-    printf("\n %i \n", granularity);
 
     snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "timestamps");
     snprintf(buf, sizeof(buf), "%u\n", 2);
@@ -589,14 +578,14 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
     }
 
     snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "bufsize");
-    snprintf(buf, sizeof(buf), "%u\n", 50176 / granularity); /* minimum is 1024 */
+    snprintf(buf, sizeof(buf), "%u\n", 6*(188+8)); /* minimum is 1024 */
     if (util_write(sys, buf, sizeof(buf)) < 0) {
         upipe_err_va(upipe, "Couldn't set buffer size (%m)");
         return UBASE_ERR_EXTERNAL;
     }
 
     snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "buffers");
-    snprintf(buf, sizeof(buf), "%u\n", 100);
+    snprintf(buf, sizeof(buf), "%u\n", 16384 / 6);
     if (util_write(sys, buf, sizeof(buf)) < 0) {
         upipe_err_va(upipe, "Couldn't set # of buffers (%m)");
         return UBASE_ERR_EXTERNAL;
