@@ -131,6 +131,15 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
                                   struct upump **upump_p)
 {
     struct upipe_ts_pcr_interpolator *upipe_ts_pcr_interpolator = upipe_ts_pcr_interpolator_from_upipe(upipe);
+    bool discontinuity = ubase_check(uref_flow_get_discontinuity(uref));
+    if (discontinuity) {
+        upipe_ts_pcr_interpolator->last_pcr = 0;
+        upipe_ts_pcr_interpolator->packets = 0;
+        upipe_ts_pcr_interpolator->pcr_packets = 0;
+        upipe_ts_pcr_interpolator->pcr_delta = 0;
+        upipe_notice_va(upipe, "Clearing state");
+    }
+
     upipe_ts_pcr_interpolator->packets++;
 
     uint64_t pcr_prog = 0;
@@ -141,8 +150,9 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
         upipe_ts_pcr_interpolator->last_pcr = pcr_prog;
 
         upipe_dbg_va(upipe,
-                "pcr_prog %"PRId64" offset %"PRId64" bitrate %"PRId64" bps",
+                "pcr_prog %"PRId64" offset %"PRId64" stored offset %"PRIu64" bitrate %"PRId64" bps",
                 pcr_prog, delta,
+		upipe_ts_pcr_interpolator->pcr_delta,
                 INT64_C(27000000) * upipe_ts_pcr_interpolator->packets * 188 * 8 / delta);
 
         if (upipe_ts_pcr_interpolator->pcr_delta)
@@ -169,7 +179,7 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
     int t;
     if (prog == 0)
         uref_clock_get_date_prog(uref, &prog, &t);
-    if (0) if (orig || prog != -1)
+    if (orig || prog != -1)
         upipe_dbg_va(upipe, "CR ORIG %"PRId64" PROG %"PRId64" (+%"PRId64") SYS %"PRId64"", orig, prog, prog - old_prog, sys);
     if (prog != -1)
         old_prog = prog;
