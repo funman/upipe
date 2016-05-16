@@ -198,6 +198,19 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
 
     UBASE_FATAL(upipe, uref_block_peek_unmap(uref, 0, buffer, ts_header))
 
+    if (pid == upipe_ts_getpcr->req_pcr_pid && has_payload) {
+        if (unlikely(upipe_ts_getpcr->pcr_cc == UINT_MAX))
+            upipe_ts_getpcr->pcr_cc = (cc + 16 - 1) & 0xf;
+
+        if (cc != ((upipe_ts_getpcr->pcr_cc + 1) & 0xf)) {
+            upipe_warn_va(upipe, "PCR discontinuity (cc %u -> %u)",
+                    upipe_ts_getpcr->pcr_cc, cc);
+            discontinuity = 1;
+        }
+
+        upipe_ts_getpcr->pcr_cc = cc;
+    }
+
     /* No adaptation field = no PCR present */
     if (likely(!has_adaptation))
         goto end;
@@ -253,15 +266,6 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     /* handle 2^33 wrap-arounds */
     uint64_t delta = (TS_CLOCK_MAX + pcr_orig - upipe_ts_getpcr->last_pcr)
         % TS_CLOCK_MAX;
-
-    if (unlikely(upipe_ts_getpcr->pcr_cc == UINT_MAX))
-        upipe_ts_getpcr->pcr_cc = (cc + 16 - 1) & 0xf;
-
-    if (cc != ((upipe_ts_getpcr->pcr_cc + 1) & 0xf)) {
-        upipe_warn_va(upipe, "PCR discontinuity (cc %u -> %u)",
-            upipe_ts_getpcr->pcr_cc, cc);
-        discontinuity = 1;
-    }
 
     if (unlikely(discontinuity || (!start && delta > MAX_PCR_INTERVAL))) {
         discontinuity = 1;
