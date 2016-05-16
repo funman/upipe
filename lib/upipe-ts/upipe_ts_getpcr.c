@@ -86,6 +86,9 @@ struct upipe_ts_getpcr {
     /** previous PCR value */
     uint64_t last_pcr;
 
+    /** arrival time of previous PCR value */
+    uint64_t last_pcr_sys;
+
     /** offset between MPEG pcrs and Upipe pcrs */
     uint64_t pcr_offset;
 
@@ -124,6 +127,7 @@ static struct upipe *upipe_ts_getpcr_alloc(struct upipe_mgr *mgr,
     upipe_ts_getpcr->last_pcr_pid = 0xffff;
     upipe_ts_getpcr->req_pcr_pid = 0xffff;
     upipe_ts_getpcr->last_pcr = UINT64_MAX;
+    upipe_ts_getpcr->last_pcr_sys = UINT64_MAX;
     upipe_ts_getpcr->pcr_offset = 0;
     upipe_ts_getpcr->pcr_cc = UINT_MAX;
 
@@ -179,6 +183,7 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
         upipe_ts_getpcr->new_pcr_pid_count = 0;
         upipe_ts_getpcr->pcr_offset = 0;
         upipe_ts_getpcr->last_pcr = UINT64_MAX;
+        upipe_ts_getpcr->last_pcr_sys = UINT64_MAX;
         upipe_ts_getpcr->pcr_cc = UINT_MAX;
     }
 
@@ -267,12 +272,24 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     uint64_t delta = (TS_CLOCK_MAX + pcr_orig - upipe_ts_getpcr->last_pcr)
         % TS_CLOCK_MAX;
 
+    uint64_t cr_sys = 0;
+    UBASE_FATAL(upipe, uref_clock_get_cr_sys(uref, &cr_sys))
+    if (unlikely(upipe_ts_getpcr->last_pcr_sys == UINT64_MAX))
+        cr_sys = upipe_ts_getpcr->last_pcr_sys;
+
+    /* PCR real-time arrival */
+    if (unlikely(cr_sys - upipe_ts_getpcr->last_pcr_sys > UCLOCK_FREQ / 10)) {
+        discontinuity = 1;
+    }
+
     if (unlikely(discontinuity || (!start && delta > MAX_PCR_INTERVAL))) {
         discontinuity = 1;
         uref_flow_set_discontinuity(uref);
         upipe_ts_getpcr->pcr_offset = 0; /* reset get_pcr state */
     } else if (unlikely(pcr_orig < upipe_ts_getpcr->last_pcr))
         upipe_ts_getpcr->pcr_offset += UCLOCK_FREQ;
+
+    upipe_ts_getpcr->last_pcr_sys = cr_sys;
 
     /* Make sure cr_prog increases monotonically */
     uint64_t prog = pcr_orig + upipe_ts_getpcr->pcr_offset;
