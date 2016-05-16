@@ -272,8 +272,8 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
     int fd = upipe_dveo_asi_sink->fd;
 
     if (unlikely(fd == -1)) {
-        uref_free(uref);
         upipe_warn(upipe, "received a buffer before opening the device");
+        uref_free(uref);
         return true;
     }
 
@@ -288,9 +288,6 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         upipe_warn(upipe, "received non-dated buffer");
         uref_free(uref);
         return true;
-    } else {
-        upipe_dbg_va(upipe, "received dated buffer: PROG %"PRId64" ORIG %"PRId64" SYS %"PRId64,
-            cr_prog, cr_orig, cr_sys);
     }
 
     // TODO
@@ -309,64 +306,88 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
             (cr_prog - upipe_dveo_asi_sink->last_cr) * rate.num / rate.den;
     }
 
-    /* Use cr_sys as 63-bits timestamp */
-
-    union {
-        uint8_t timestamp[8];
-        uint64_t pcr;
-    } timestamp;
-
-    timestamp.pcr = cr_prog;
     if (!cr_prog || cr_prog == -1) {
-        uref_free(uref);
         upipe_warn(upipe, "prog not set, not writing anything");
-        return true;
-    }
-
-    int iovec_count = uref_block_iovec_count(uref, 0, -1);
-    if (unlikely(iovec_count == -1)) {
-        uref_free(uref);
-        upipe_warn(upipe, "cannot read ubuf buffer");
-        return true;
-    }
-
-    if (unlikely(iovec_count == 0)) {
         uref_free(uref);
         return true;
     }
 
-    // FIXME ?
-    if (iovec_count > 1)
-        iovec_count = 1;
-    struct iovec iovecs[1];
-    if (unlikely(!ubase_check(uref_block_iovec_read(uref, 0, -1, iovecs)))) {
-        uref_free(uref);
-        upipe_warn(upipe, "cannot read ubuf buffer");
-        return true;
-    }
+    uint64_t hdr_size;
+    if (!ubase_check(uref_block_get_header_size(uref, &hdr_size)))
+        hdr_size = 0;
 
     bool reset_first_timestamp = false;
-    if (upipe_dveo_asi_sink->first_timestamp) {
-        upipe_dveo_asi_sink->first_timestamp = false;
-        timestamp.pcr |= 1LLU << 63; /* Set MSB = Set the counter */
-        timestamp.pcr -= 27000000; /* add 1s latency */
-        reset_first_timestamp = true; /* Make sure we set the counter */
+
+    if (hdr_size == 0) {
+        /* alloc header */
+        struct ubuf *header = ubuf_block_alloc(uref->ubuf->mgr, 8);
+        if (unlikely(!header)) {
+            uref_free(uref);
+            return false;
+        }
+
+        /* Use cr_sys as 63-bits timestamp */
+        union {
+            uint8_t timestamp[8];
+            uint64_t pcr;
+        } timestamp;
+
+        timestamp.pcr = cr_prog;
+        if (upipe_dveo_asi_sink->first_timestamp) {
+            upipe_dveo_asi_sink->first_timestamp = false;
+            timestamp.pcr |= 1LLU << 63; /* Set MSB = Set the counter */
+            timestamp.pcr -= 27000000; /* add 1s latency */
+            reset_first_timestamp = true; /* Make sure we set the counter */
+        }
+
+        /* write header */
+        int size = 8;
+        uint8_t *header_write_ptr;
+        if (!ubase_check(ubuf_block_write(header, 0, &size, &header_write_ptr))) {
+            upipe_err(upipe, "could not write header");
+            ubuf_free(header);
+            uref_free(uref);
+            return true;
+        }
+        memcpy(header_write_ptr, timestamp.timestamp, 8);
+        uref_block_unmap(uref, 0);
+
+        /* append payload (current ubuf) to header to form segmented ubuf */
+        struct ubuf *payload = uref_detach_ubuf(uref);
+        if (unlikely(!ubase_check(ubuf_block_append(header, payload)))) {
+            upipe_warn(upipe, "could not append payload to header");
+            ubuf_free(header);
+            ubuf_free(payload);
+            uref_free(uref);
+            return true;
+        }
+        uref_attach_ubuf(uref, header);
+        uref_block_set_header_size(uref, 8);
+
+        upipe_dbg_va(upipe, "received dated buffer: PROG %"PRId64" ORIG %"PRId64
+                " SYS %"PRId64" TIMESTAMP %"PRIu64,
+                cr_prog, cr_orig, cr_sys, timestamp.pcr);
     }
 
+    for (;;) {
+        int iovec_count = uref_block_iovec_count(uref, 0, -1);
+        if (unlikely(iovec_count == -1)) {
+            upipe_warn(upipe, "cannot read ubuf buffer");
+            break;
+        }
+        if (unlikely(iovec_count == 0)) {
+            break;
+        }
 
-    uint8_t ts[188+8];
-    memcpy(&ts[8], iovecs[0].iov_base, 188);
-    memcpy(&ts[0], timestamp.timestamp, 8);
+        struct iovec iovecs[iovec_count];
+        if (unlikely(!ubase_check(uref_block_iovec_read(uref, 0, -1,
+                                                        iovecs)))) {
+            upipe_warn(upipe, "cannot read ubuf buffer");
+            break;
+        }
 
-    static uint64_t prev;
-    upipe_notice_va(upipe, "Timestamp %"PRIu64" (+%"PRId64")", timestamp.pcr, timestamp.pcr - prev);
-    //if ((int64_t)timestamp.pcr - (int64_t)prev > 1000000) exit(1); // REMOVE ME
-    prev = timestamp.pcr;
-
-    size_t n = sizeof(ts);
-
-    while (n) {
-        ssize_t ret = write(fd, ts, n);
+        ssize_t ret = writev(upipe_dveo_asi_sink->fd, iovecs, iovec_count);
+        uref_block_iovec_unmap(uref, 0, -1, iovecs);
 
         if (unlikely(ret == -1)) {
             switch (errno) {
@@ -376,10 +397,10 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
 #if EAGAIN != EWOULDBLOCK
                 case EWOULDBLOCK:
 #endif
-					upipe_dveo_asi_sink_poll(upipe);
+                    upipe_notice_va(upipe, "polling");
+                    upipe_dveo_asi_sink_poll(upipe);
                     return false;
                 default:
-                    upipe_err_va(upipe, "write: %m");
                     break;
             }
             upipe_warn_va(upipe, "write error to device %d (%m)", upipe_dveo_asi_sink->card_idx);
@@ -388,14 +409,15 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
             break;
         }
 
-        n -= ret;
-        if (n)
-            upipe_err_va(upipe, "incomplete write %zd", ret);
-        else
+        size_t uref_size;
+        if (ubase_check(uref_block_size(uref, &uref_size)) &&
+            uref_size == ret) {
             reset_first_timestamp = false;
+            break;
+        }
+        uref_block_resize(uref, ret, -1);
     }
 
-    uref_block_iovec_unmap(uref, 0, -1, iovecs);
     uref_free(uref);
 
     if (reset_first_timestamp)
@@ -547,6 +569,17 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
     static const char dev_fmt[] = "/dev/asitx%u";
     static const char sys_fmt[] = "/sys/class/asi/asitx%u/%s";
     static const char dvbm_sys_fmt[] = "/sys/class/dvbm/%u/%s";
+    int granularity;
+
+    snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "granularity");
+    if (util_read(sys, buf, 1) < 0) {
+        upipe_err_va(upipe, "Couldn't read granularity");
+        return UBASE_ERR_EXTERNAL;
+    }
+
+    buf[1] = '\0';
+    granularity = atoi(buf);
+    printf("\n %i \n", granularity);
 
     snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "timestamps");
     snprintf(buf, sizeof(buf), "%u\n", 2);
@@ -556,14 +589,14 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
     }
 
     snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "bufsize");
-    snprintf(buf, sizeof(buf), "%u\n", 6*(188+8)); /* minimum is 1024 */
+    snprintf(buf, sizeof(buf), "%u\n", 50176 / granularity); /* minimum is 1024 */
     if (util_write(sys, buf, sizeof(buf)) < 0) {
         upipe_err_va(upipe, "Couldn't set buffer size (%m)");
         return UBASE_ERR_EXTERNAL;
     }
 
     snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "buffers");
-    snprintf(buf, sizeof(buf), "%u\n", 16384);
+    snprintf(buf, sizeof(buf), "%u\n", 100);
     if (util_write(sys, buf, sizeof(buf)) < 0) {
         upipe_err_va(upipe, "Couldn't set # of buffers (%m)");
         return UBASE_ERR_EXTERNAL;
@@ -602,13 +635,13 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
 
     unsigned int packetsize;
     switch (mode) {
-    case ASI_CTL_TX_MODE_188:     packetsize = 188; break;
-    case ASI_CTL_TX_MODE_MAKE204:
-        upipe_dbg(upipe, "Appending 0x00 bytes to make 204 bytes packets");
-    case ASI_CTL_TX_MODE_204:     packetsize = 204; break;
-    default:
-        upipe_err_va(upipe, "Unknown TX mode %d", mode);
-        goto error;
+        case ASI_CTL_TX_MODE_188:     packetsize = 188; break;
+        case ASI_CTL_TX_MODE_MAKE204:
+            upipe_dbg(upipe, "Appending 0x00 bytes to make 204 bytes packets");
+        case ASI_CTL_TX_MODE_204:     packetsize = 204; break;
+        default:
+            upipe_err_va(upipe, "Unknown TX mode %d", mode);
+            goto error;
     }
 
     unsigned long int clock_source = 0;
@@ -621,18 +654,18 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
     }
 
     switch (clock_source) {
-    case ASI_CTL_TX_CLKSRC_ONBOARD:
-        upipe_dbg(upipe, "Using onboard oscillator");
-        break;
-    case ASI_CTL_TX_CLKSRC_EXT:
-        upipe_dbg(upipe, "Using external reference clock");
-        break;
-    case ASI_CTL_TX_CLKSRC_RX:
-        upipe_dbg(upipe, "Using recovered receive clock");
-        break;
-    default:
-        upipe_dbg(upipe, "Unknown clock source");
+        case ASI_CTL_TX_CLKSRC_ONBOARD:
+            upipe_dbg(upipe, "Using onboard oscillator");
             break;
+        case ASI_CTL_TX_CLKSRC_EXT:
+            upipe_dbg(upipe, "Using external reference clock");
+            break;
+        case ASI_CTL_TX_CLKSRC_RX:
+            upipe_dbg(upipe, "Using recovered receive clock");
+            break;
+        default:
+            upipe_dbg(upipe, "Unknown clock source");
+                break;
     }
 
     if (!(cap & ASI_CAP_TX_TIMESTAMPS)) {
