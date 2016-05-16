@@ -263,6 +263,11 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
     if (unlikely(ubase_check(uref_flow_get_def(uref, &def)))) {
         uint64_t latency = 0;
         uref_clock_get_latency(uref, &latency);
+
+        // TODO
+        //upipe_warn_va(upipe, "def %s - latency %"PRIu64" stored latency %"PRIu64,
+        //    def, latency, upipe_dveo_asi_sink->latency);
+
         if (latency > upipe_dveo_asi_sink->latency)
             upipe_dveo_asi_sink->latency = latency;
         uref_free(uref);
@@ -290,9 +295,6 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         return true;
     }
 
-    // TODO
-    //cr_sys += upipe_dveo_asi_sink->latency;
-
     if (cr_prog && cr_prog != -1) {
         upipe_dveo_asi_sink->last_cr = cr_prog;
     } else {
@@ -312,9 +314,18 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         return true;
     }
 
+    cr_prog += upipe_dveo_asi_sink->latency;
+
     uint64_t hdr_size;
     if (!ubase_check(uref_block_get_header_size(uref, &hdr_size)))
         hdr_size = 0;
+
+    bool discontinuity = ubase_check(uref_flow_get_discontinuity(uref));
+    if (discontinuity) {
+        upipe_warn_va(upipe, "DISCONTINUITY, resetting timestamp");
+        upipe_dveo_asi_sink->first_timestamp = true;
+            //fsync (fd); // NOT GOOD, BLOCKING
+    }
 
     bool reset_first_timestamp = false;
 
@@ -336,7 +347,7 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         if (upipe_dveo_asi_sink->first_timestamp) {
             upipe_dveo_asi_sink->first_timestamp = false;
             timestamp.pcr |= 1LLU << 63; /* Set MSB = Set the counter */
-            timestamp.pcr -= 2700000; /* add 100ms latency */
+            //timestamp.pcr -= 2700000; /* add 100ms latency */
             reset_first_timestamp = true; /* Make sure we set the counter */
         }
 
@@ -436,17 +447,24 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
             upipe_notice(upipe, "driver transmit buffer queue underrun");
         if (val & ASI_EVENT_TX_FIFO)
             upipe_notice(upipe, "onboard transmit FIFO underrun");
-        if (val & ASI_EVENT_TX_DATA)
+        if (val & ASI_EVENT_TX_DATA) {
             upipe_notice(upipe, "transmit data status change");
+            if (ioctl(fd, ASI_IOC_TXGETTXD, &val) < 0)
+                upipe_err_va(upipe, "ioctl TXGETTXDfailed (%m)");
+            else
+                upipe_notice_va(upipe, "transmitting: %d", val);
+        }
     }
 
     if (ioctl(fd, ASI_IOC_TXGETBUFLEVEL, &val) < 0)
         upipe_err_va(upipe, "ioctl TXGETBUFLEVEL failed (%m)");
     else {
         static int old;
-        if (val != old)
-            upipe_notice_va(upipe, "buf level %d", val);
-        old = val;
+        if ((val - 3) >  old || (val+3) < old) {
+            float secs = (float)val * 6 * 196 * 8 / 10500000;
+            upipe_notice_va(upipe, "buf level %d -> %.2fs", val, secs);
+            old = val;
+        }
     }
 
     if (ioctl(fd, ASI_IOC_TXGETBYTECOUNT, &val) < 0)
@@ -585,7 +603,7 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
     }
 
     snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "buffers");
-    snprintf(buf, sizeof(buf), "%u\n", 16384 / 6);
+    snprintf(buf, sizeof(buf), "%u\n", 10);
     if (util_write(sys, buf, sizeof(buf)) < 0) {
         upipe_err_va(upipe, "Couldn't set # of buffers (%m)");
         return UBASE_ERR_EXTERNAL;
