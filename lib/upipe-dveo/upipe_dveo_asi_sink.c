@@ -327,6 +327,21 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
             //fsync (fd); // NOT GOOD, BLOCKING
     }
 
+    if (unlikely(upipe_dveo_asi_sink->first_timestamp)) {
+        int val;
+
+        if (ioctl(fd, ASI_IOC_TXGETTXD, &val) < 0) {
+            upipe_err_va(upipe, "ioctl TXGETTXDfailed (%m)");
+            upipe_throw_fatal(upipe, UBASE_ERR_UNKNOWN);
+        }
+
+        if (val) {
+            upipe_warn(upipe, "Waiting for transmission to stop");
+            uref_free(uref);
+            return true;
+        }
+    }
+
     bool reset_first_timestamp = false;
 
     if (hdr_size == 0) {
