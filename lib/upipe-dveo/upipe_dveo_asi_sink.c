@@ -347,7 +347,7 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         if (upipe_dveo_asi_sink->first_timestamp) {
             upipe_dveo_asi_sink->first_timestamp = false;
             timestamp.pcr |= 1LLU << 63; /* Set MSB = Set the counter */
-            //timestamp.pcr -= 2700000; /* add 100ms latency */
+            timestamp.pcr -= 270000; /* add 10ms latency */
             reset_first_timestamp = true; /* Make sure we set the counter */
         }
 
