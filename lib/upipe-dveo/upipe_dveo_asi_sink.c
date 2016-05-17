@@ -584,6 +584,7 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
 
     struct upipe_dveo_asi_sink *upipe_dveo_asi_sink = upipe_dveo_asi_sink_from_upipe(upipe);
     char path[20], sys[50], buf[20];
+    memset(buf, 0, sizeof(buf));
 
     static const char dev_fmt[] = "/dev/asitx%u";
     static const char sys_fmt[] = "/sys/class/asi/asitx%u/%s";
