@@ -58,6 +58,7 @@
 #include <upipe/uprobe_upump_mgr.h>
 #include <upipe/uprobe_uclock.h>
 #include <upipe/uprobe_ubuf_mem.h>
+#include <upipe/uprobe_dejitter.h>
 #include <upipe/uclock.h>
 #include <upipe/uclock_std.h>
 #include <upipe/umem.h>
@@ -75,9 +76,15 @@
 #include <upipe-modules/upipe_genaux.h>
 #include <upipe-modules/upipe_dup.h>
 #include <upipe-modules/upipe_udp_source.h>
+#include <upipe-modules/upipe_rtp_source.h>
+#include <upipe-modules/upipe_file_source.h>
 #include <upipe-modules/upipe_file_sink.h>
 #include <upipe-modules/upipe_multicat_sink.h>
 #include <upipe-modules/upipe_udp_sink.h>
+#include <upipe-ts/upipe_ts_getpcr.h>
+#include <upipe-ts/upipe_ts_pcr_interpolator.h>
+#include <upipe-ts/upipe_ts_align.h>
+#include <upipe-dveo/upipe_dveo_asi_sink.h>
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -151,6 +158,7 @@ int main(int argc, char *argv[])
     }
 
     /* setup environnement */
+
     struct ev_loop *loop = ev_default_loop(0);
     struct umem_mgr *umem_mgr = umem_alloc_mgr_alloc();
     struct udict_mgr *udict_mgr = udict_inline_mgr_alloc(UDICT_POOL_DEPTH,
@@ -159,96 +167,94 @@ int main(int argc, char *argv[])
                                                    0);
     struct upump_mgr *upump_mgr = upump_ev_mgr_alloc(loop, UPUMP_POOL,
                                                      UPUMP_BLOCKER_POOL);
-    struct uclock *uclock = uclock_std_alloc(UCLOCK_FLAG_REALTIME);
     struct uprobe uprobe;
     uprobe_init(&uprobe, catch, NULL);
     struct uprobe *logger = uprobe_stdio_alloc(&uprobe, stdout, loglevel);
     assert(logger != NULL);
-    logger = uprobe_uref_mgr_alloc(logger, uref_mgr);
+    struct uprobe *uprobe_dejitter = uprobe_dejitter_alloc(logger, true, 0);
+    assert(uprobe_dejitter != NULL);
+
+    logger = uprobe_uref_mgr_alloc(uprobe_dejitter, uref_mgr);
+
     assert(logger != NULL);
     logger = uprobe_upump_mgr_alloc(logger, upump_mgr);
-    assert(logger != NULL);
-    logger = uprobe_uclock_alloc(logger, uclock);
     assert(logger != NULL);
     logger = uprobe_ubuf_mem_alloc(logger, umem_mgr, UBUF_POOL_DEPTH,
                                    UBUF_POOL_DEPTH);
     assert(logger != NULL);
+    struct uclock *uclock = NULL;
+#if 0
+    struct upipe_mgr *asi_sink_mgr = upipe_fsink_mgr_alloc();
 
-    struct upipe_mgr *upipe_multicat_sink_mgr = upipe_multicat_sink_mgr_alloc();
-    struct upipe_mgr *upipe_fsink_mgr = upipe_fsink_mgr_alloc();
+    struct upipe *upipe_asi_sink = upipe_void_alloc(asi_sink_mgr,
+            uprobe_pfx_alloc(logger, loglevel, "fsink"));
+    upipe_fsink_set_path(upipe_asi_sink, "/dev/null", UPIPE_FSINK_NONE);
 
+    uclock = uclock_std_alloc(UCLOCK_FLAG_REALTIME);
+#else
+    struct upipe_mgr *asi_sink_mgr = upipe_dveo_asi_sink_mgr_alloc();
 
-    /* udp source */
-    struct upipe_mgr *upipe_udpsrc_mgr = upipe_udpsrc_mgr_alloc();
-    struct upipe *upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr,
+    struct upipe *upipe_asi_sink = upipe_void_alloc(asi_sink_mgr,
             uprobe_pfx_alloc(uprobe_use(logger),
-                             loglevel, "udp source"));
-    upipe_set_output_size(upipe_udpsrc, READ_SIZE);
-    upipe_attach_uclock(upipe_udpsrc);
-    if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath))) {
+                             loglevel, "asisink"));
+    upipe_set_option(upipe_asi_sink, "card-idx", "0");
+
+    if (!ubase_check(upipe_dveo_asi_sink_get_uclock(upipe_asi_sink, &uclock)))
+        return EXIT_FAILURE;
+#endif
+
+    logger = uprobe_uclock_alloc(logger, uclock);
+    assert(logger != NULL);
+#if 1
+    /* rtp source */
+    struct upipe_mgr *upipe_rtpsrc_mgr = upipe_rtpsrc_mgr_alloc();
+    struct upipe *upipe_rtpsrc = upipe_void_alloc(upipe_rtpsrc_mgr,
+            uprobe_pfx_alloc(uprobe_use(logger),
+                             loglevel, "rtp source"));
+
+    upipe_mgr_release(upipe_rtpsrc_mgr);
+    if (!ubase_check(upipe_set_uri(upipe_rtpsrc, srcpath))) {
         return EXIT_FAILURE;
     }
+    upipe_attach_uclock(upipe_rtpsrc);
+#else
+    struct upipe_mgr *upipe_fsrc_mgr = upipe_fsrc_mgr_alloc();
+    struct upipe *upipe_rtpsrc = upipe_void_alloc(upipe_fsrc_mgr,
+            uprobe_pfx_alloc(uprobe_use(logger),
+                             loglevel, "fsrc"));
 
-    if (udp) {
-        /* send to udp */
-        struct upipe_mgr *upipe_udpsink_mgr = upipe_udpsink_mgr_alloc();
-        struct upipe *upipe_sink = upipe_void_alloc_output(upipe_udpsrc,
-                upipe_udpsink_mgr,
-                uprobe_pfx_alloc(uprobe_use(logger),
-                                 loglevel, "udpsink"));
-        if (!ubase_check(upipe_udpsink_set_uri(upipe_sink, dirpath, 0))) {
-            return EXIT_FAILURE;
-        }
-        upipe_release(upipe_sink);
+    if (!ubase_check(upipe_set_uri(upipe_rtpsrc,
+                    "file:///home/obe/media/opuslow-2014-11-10.ts"))) {
+        return EXIT_FAILURE;
     }
-    else 
-    {
-        /* dup */
-        struct upipe_mgr *upipe_dup_mgr = upipe_dup_mgr_alloc();
-        struct upipe *upipe_dup = upipe_void_alloc_output(upipe_udpsrc,
-                upipe_dup_mgr,
-                uprobe_pfx_alloc(uprobe_use(logger), loglevel, "dup"));
+    upipe_attach_uclock(upipe_rtpsrc);
+#endif
 
-        struct upipe *upipe_dup_data = upipe_void_alloc_sub(upipe_dup,
-                    uprobe_pfx_alloc(uprobe_use(logger),
-                                     loglevel, "dupdata"));
-        struct upipe *upipe_dup_aux = upipe_void_alloc_sub(upipe_dup,
-                    uprobe_pfx_alloc(uprobe_use(logger),
-                                     loglevel, "dupaux"));
+    assert(udp);
 
-        /* data files (multicat sink) */
-        struct upipe *datasink = upipe_void_alloc_output(upipe_dup_data,
-                upipe_multicat_sink_mgr,
-                uprobe_pfx_alloc(uprobe_use(logger),
-                                 loglevel, "datasink"));
-        upipe_multicat_sink_set_fsink_mgr(datasink, upipe_fsink_mgr);
-        if (rotate) {
-            upipe_multicat_sink_set_rotate(datasink, rotate);
-        }
-        upipe_multicat_sink_set_path(datasink, dirpath, suffix);
-        upipe_release(datasink);
+    /* send to udp */
 
-        /* aux block generation pipe */
-        struct upipe_mgr *upipe_genaux_mgr = upipe_genaux_mgr_alloc();
-        struct upipe *genaux = upipe_void_alloc_output(upipe_dup_aux,
-                upipe_genaux_mgr,
-                uprobe_pfx_alloc(uprobe_use(logger),
-                                 loglevel, "genaux"));
+    struct upipe_mgr *ts_align_mgr = upipe_ts_align_mgr_alloc();
+    struct upipe *upipe_ts_align = upipe_void_alloc_output(upipe_rtpsrc,
+            ts_align_mgr,
+            uprobe_pfx_alloc(uprobe_use(logger),
+                             loglevel, "tsalign"));
 
-        /* aux files (multicat sink) */
-        struct upipe *auxsink = upipe_void_alloc_output(genaux,
-                upipe_multicat_sink_mgr,
-                uprobe_pfx_alloc(uprobe_use(logger),
-                                 loglevel, "auxsink"));
-        upipe_multicat_sink_set_fsink_mgr(auxsink, upipe_fsink_mgr);
-        if (rotate) {
-            upipe_multicat_sink_set_rotate(auxsink, rotate);
-        }
-        upipe_multicat_sink_set_path(auxsink, dirpath, ".aux");
-        upipe_release(genaux);
-        upipe_release(auxsink);
-        upipe_release(upipe_dup);
-    }
+    struct upipe_mgr *ts_getpcr_mgr = upipe_ts_getpcr_mgr_alloc();
+    struct upipe *upipe_ts_getpcr = upipe_void_alloc_output(upipe_ts_align,
+            ts_getpcr_mgr,
+            uprobe_pfx_alloc(uprobe_use(logger),
+                             loglevel, "getpcr"));
+    upipe_release(upipe_ts_align);
+    struct upipe_mgr *ts_pcr_interpolator_mgr = upipe_ts_pcr_interpolator_mgr_alloc();
+    struct upipe *upipe_ts_pcr_interpolator = upipe_void_alloc_output(upipe_ts_getpcr,
+            ts_pcr_interpolator_mgr,
+            uprobe_pfx_alloc(uprobe_use(logger),
+                             loglevel, "pcr_interpolator"));
+    upipe_release(upipe_ts_getpcr);
+    upipe_set_output(upipe_ts_pcr_interpolator, upipe_asi_sink);
+    upipe_release(upipe_ts_pcr_interpolator);
+    upipe_release(upipe_asi_sink);
 
     /* fire loop ! */
     ev_loop(loop, 0);
@@ -262,7 +268,7 @@ int main(int argc, char *argv[])
     uref_mgr_release(uref_mgr);
     udict_mgr_release(udict_mgr);
     umem_mgr_release(umem_mgr);
-    uclock_release(uclock);
+    //uclock_release(uclock);
 
     ev_default_destroy();
     return 0;
