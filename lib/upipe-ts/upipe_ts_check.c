@@ -159,6 +159,7 @@ static void upipe_ts_check_input(struct upipe *upipe, struct uref *uref,
         return;
     }
 
+    bool first = true;
     while (size > upipe_ts_check->output_size) {
         struct uref *output = uref_block_splice(uref, 0,
                                                 upipe_ts_check->output_size);
@@ -167,6 +168,11 @@ static void upipe_ts_check_input(struct upipe *upipe, struct uref *uref,
             upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
             return;
         }
+
+        if (!first)
+            uref_flow_delete_discontinuity(output);
+        first = false;
+
         if (!upipe_ts_check_check(upipe, output, upump_p)) {
             uref_free(uref);
             return;
@@ -175,6 +181,10 @@ static void upipe_ts_check_input(struct upipe *upipe, struct uref *uref,
         uref_block_resize(uref, upipe_ts_check->output_size, -1);
         size -= upipe_ts_check->output_size;
     }
+
+    if (!first)
+        uref_flow_delete_discontinuity(uref);
+
     if (size == upipe_ts_check->output_size)
         upipe_ts_check_check(upipe, uref, upump_p);
 }
