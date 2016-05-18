@@ -126,6 +126,7 @@ static struct upipe *upipe_ts_getpcr_alloc(struct upipe_mgr *mgr,
     upipe_ts_getpcr_init_output(upipe);
     upipe_ts_getpcr->last_pcr_pid = 0xffff;
     upipe_ts_getpcr->req_pcr_pid = 0xffff;
+    upipe_ts_getpcr->new_pcr_pid_count = 0;
     upipe_ts_getpcr->last_pcr = UINT64_MAX;
     upipe_ts_getpcr->last_sys = UINT64_MAX;
     upipe_ts_getpcr->pcr_offset = 0;
