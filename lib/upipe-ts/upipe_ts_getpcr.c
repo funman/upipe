@@ -74,13 +74,10 @@ struct upipe_ts_getpcr {
     /** list of output requests */
     struct uchain request_list;
 
-    /** last PCR PID */
-    uint16_t last_pcr_pid;
-
     /** requested PCR PID */
-    uint16_t req_pcr_pid;
+    uint16_t pcr_pid;
 
-    /** new PCR PID count */
+    /** number of PCRs on an unexpected PID */
     uint8_t new_pcr_pid_count;
 
     /** previous PCR value */
@@ -124,8 +121,7 @@ static struct upipe *upipe_ts_getpcr_alloc(struct upipe_mgr *mgr,
     struct upipe_ts_getpcr *upipe_ts_getpcr = upipe_ts_getpcr_from_upipe(upipe);
     upipe_ts_getpcr_init_urefcount(upipe);
     upipe_ts_getpcr_init_output(upipe);
-    upipe_ts_getpcr->last_pcr_pid = 0xffff;
-    upipe_ts_getpcr->req_pcr_pid = 0xffff;
+    upipe_ts_getpcr->pcr_pid = 0xffff;
     upipe_ts_getpcr->new_pcr_pid_count = 0;
     upipe_ts_getpcr->last_pcr = UINT64_MAX;
     upipe_ts_getpcr->last_sys = UINT64_MAX;
@@ -202,9 +198,7 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
 
     bool discontinuity = ubase_check(uref_flow_get_discontinuity(uref));
 
-    /*  */
-    if (upipe_ts_getpcr->req_pcr_pid == 0xffff &&
-            upipe_ts_getpcr->new_pcr_pid_count > 20)
+    if (upipe_ts_getpcr->new_pcr_pid_count > 20)
         discontinuity = 1;
 
     /* packet real-time arrival */
@@ -219,7 +213,6 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
 
     /* reset on discontinuities */
     if (discontinuity) {
-        upipe_ts_getpcr->last_pcr_pid = 0xffff;
         upipe_ts_getpcr->new_pcr_pid_count = 0;
         upipe_ts_getpcr->pcr_offset = 0;
         upipe_ts_getpcr->last_pcr = UINT64_MAX;
@@ -246,7 +239,7 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     UBASE_FATAL(upipe, uref_block_peek_unmap(uref, 0, buffer, ts_header))
 
     /* Check continuity counter on PCR PID */
-    if (pid == upipe_ts_getpcr->req_pcr_pid && has_payload) {
+    if (pid == upipe_ts_getpcr->pcr_pid && has_payload) {
         if (unlikely(upipe_ts_getpcr->pcr_cc == UINT_MAX))
             upipe_ts_getpcr->pcr_cc = (cc + 16 - 1) & 0xf;
 
@@ -259,14 +252,6 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
         upipe_ts_getpcr->pcr_cc = cc;
     }
 
-    /* TODO: revisit PCR / discontinuity detection */
-    if (upipe_ts_getpcr->req_pcr_pid == 0xffff)
-        upipe_ts_getpcr->req_pcr_pid = pid;
-
-    /* Not the PID we expected ? */
-    if (pid != upipe_ts_getpcr->req_pcr_pid && upipe_ts_getpcr->last_pcr_pid == 0xffff)
-        goto bad_pcr;
-
     /* No adaptation field = no PCR */
     if (!has_adaptation)
         goto end;
@@ -275,6 +260,13 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     uint64_t pcr_orig = upipe_ts_getpcr_read_pcr(upipe, uref, has_payload);
     if (pcr_orig == UINT64_MAX)
         goto end;
+
+    if (upipe_ts_getpcr->pcr_pid == 0xffff)
+        upipe_ts_getpcr->pcr_pid = pid; /* we got a PCR PID */
+    else if (upipe_ts_getpcr->pcr_pid != pid) {
+        upipe_ts_getpcr->new_pcr_pid_count++; /* got a different PID */
+        goto end;
+    }
 
     /* Store original (stream) PCR */
     uref_clock_set_cr_orig(uref, pcr_orig);
@@ -309,12 +301,6 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
 
     upipe_ts_getpcr->last_pcr = pcr_orig;
     upipe_ts_getpcr->new_pcr_pid_count = 0;
-
-bad_pcr:
-    if (upipe_ts_getpcr->req_pcr_pid == 0xffff && upipe_ts_getpcr->last_pcr_pid != pid)
-        upipe_ts_getpcr->new_pcr_pid_count++;
-
-    upipe_ts_getpcr->last_pcr_pid = pid;
 
 end:
     upipe_ts_getpcr_output(upipe, uref, upump_p);
