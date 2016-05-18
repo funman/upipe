@@ -154,7 +154,7 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
         uint64_t delta = pcr_prog - upipe_ts_pcr_interpolator->last_pcr;
         upipe_ts_pcr_interpolator->last_pcr = pcr_prog;
 
-        upipe_dbg_va(upipe,
+        upipe_verbose_va(upipe,
                 "pcr_prog %"PRId64" offset %"PRId64" stored offset %"PRIu64" bitrate %"PRId64" bps",
                 pcr_prog, delta,
 		upipe_ts_pcr_interpolator->pcr_delta,
@@ -178,7 +178,7 @@ static void upipe_ts_pcr_interpolator_input(struct upipe *upipe, struct uref *ur
         return;
     }
 
-#if 1
+#if 0
     static uint64_t old_prog;
     uint64_t orig = 0;
     uref_clock_get_cr_orig(uref, &orig);
@@ -217,8 +217,8 @@ static int upipe_ts_pcr_interpolator_set_flow_def(struct upipe *upipe,
     UBASE_RETURN(uref_flow_get_def(flow_def, &def))
     if (ubase_ncmp(def, EXPECTED_FLOW_DEF))
         return UBASE_ERR_INVALID;
-    struct uref *flow_def_dup;
-    if (unlikely((flow_def_dup = uref_dup(flow_def)) == NULL)) {
+    struct uref *flow_def_dup = uref_dup(flow_def);
+    if (unlikely(flow_def_dup == NULL)) {
         upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
         return UBASE_ERR_ALLOC;
     }

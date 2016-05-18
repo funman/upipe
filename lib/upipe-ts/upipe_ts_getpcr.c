@@ -303,7 +303,7 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
     uref_clock_set_cr_prog(uref, prog);
     upipe_throw_clock_ref(upipe, uref, prog, discontinuity);
 
-    upipe_dbg_va(upipe, "PCR: %"PRId64" > %"PRId64", %"PRId64,
+    upipe_verbose_va(upipe, "PCR: %"PRId64" > %"PRId64", %"PRId64,
             pcr_orig, prog, delta);
 
     upipe_ts_getpcr->last_pcr = pcr_orig;
