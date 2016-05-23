@@ -35,6 +35,27 @@ extern "C" {
 
 #define UPIPE_TS_PCR_INTERPOLATOR_SIGNATURE UBASE_FOURCC('t','s','p','i')
 
+/** @This extends upipe_command with specific commands. */
+enum upipe_ts_pcr_interpolator_sink_command {
+    UPIPE_TS_PCR_INTERPOLATOR_SENTINEL = UPIPE_CONTROL_LOCAL,
+
+    /** returns the bitrate (struct urational*) **/
+    UPIPE_TS_PCR_INTERPOLATOR_GET_BITRATE,
+};
+
+/** @This returns the current bitrate of the pipe.
+ *
+ * @param upipe description structure of the pipe
+ * @param urational filled in with the bitrate in bits per clock tick.
+ * @return an error code
+ */
+static inline int upipe_ts_pcr_interpolator_get_bitrate(struct upipe *upipe,
+                                              struct urational *urational)
+{
+    return upipe_control(upipe, UPIPE_TS_PCR_INTERPOLATOR_GET_BITRATE,
+                          UPIPE_TS_PCR_INTERPOLATOR_SIGNATURE, urational);
+}
+
 /** @This returns the management structure for all ts_pcr_interpolator pipes.
  *
  * @return pointer to manager
