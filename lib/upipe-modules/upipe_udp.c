@@ -345,8 +345,10 @@ int upipe_udp_open_socket(struct upipe *upipe, const char *_uri, int ttl,
     char *ifname = NULL;
 #endif
 
-    if (!uri)
+    if (!uri) {
+        upipe_err(upipe, "Allocation failed");
         return -1;
+    }
 
     memset(&bind_addr, 0, sizeof(union sockaddru));
     memset(&connect_addr, 0, sizeof(union sockaddru));
@@ -380,6 +382,8 @@ int upipe_udp_open_socket(struct upipe *upipe, const char *_uri, int ttl,
 
     if (*token == '\0') {
         free(uri);
+        upipe_err(upipe, "Empty URI");
+        errno = 0; // no system call failed
         return -1;
     }
 
@@ -387,7 +391,9 @@ int upipe_udp_open_socket(struct upipe *upipe, const char *_uri, int ttl,
     if (token[0] != '@') {
         if (!upipe_udp_parse_node_service(upipe, token, &token, connect_port,
                                         &connect_if_index, &connect_addr.ss)) {
+            upipe_err_va(upipe, "Couldn't parse connect address %s", token);
             free(uri);
+            errno = 0; // no system call failed
             return -1;
         }
         /* required on some architectures */
@@ -398,7 +404,9 @@ int upipe_udp_open_socket(struct upipe *upipe, const char *_uri, int ttl,
         token++;
         if (!upipe_udp_parse_node_service(upipe, token, &token, bind_port,
                                         &bind_if_index, &bind_addr.ss)) {
+            upipe_err_va(upipe, "Couldn't parse bind address %s", token);
             free(uri);
+            errno = 0; // no system call failed
             return -1;
         }
         /* required on some architectures */
@@ -408,6 +416,8 @@ int upipe_udp_open_socket(struct upipe *upipe, const char *_uri, int ttl,
     if (bind_addr.ss.ss_family == AF_UNSPEC &&
          connect_addr.ss.ss_family == AF_UNSPEC) {
         free(uri);
+        upipe_err(upipe, "Could not determine IP family");
+        errno = 0; // no system call failed
         return -1;
     }
 
