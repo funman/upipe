@@ -281,10 +281,8 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
 
     uint64_t cr_sys = 0;
     uint64_t cr_prog = 0;
-    uint64_t cr_orig = 0;
 
     uref_clock_get_cr_prog(uref, &cr_prog);
-    uref_clock_get_cr_orig(uref, &cr_orig);
 
     if (unlikely(!ubase_check(uref_clock_get_cr_sys(uref, &cr_sys)))) {
         upipe_warn(upipe, "received non-dated buffer");
@@ -387,9 +385,13 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         uref_attach_ubuf(uref, header);
         uref_block_set_header_size(uref, 8);
 
-        if (0) upipe_dbg_va(upipe, "received dated buffer: PROG %"PRId64" ORIG %"PRId64
-                " SYS %"PRId64" TIMESTAMP %"PRIu64,
-                cr_prog, cr_orig, cr_sys, timestamp.pcr);
+        if (0) {
+            uint64_t cr_orig = 0;
+            uref_clock_get_cr_orig(uref, &cr_orig);
+            upipe_dbg_va(upipe, "received dated buffer: PROG %"PRId64" ORIG %"PRId64
+                    " SYS %"PRId64" TIMESTAMP %"PRIu64,
+                    cr_prog, cr_orig, cr_sys, timestamp.pcr);
+        }
     }
 
     for (;;) {
