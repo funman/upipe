@@ -387,7 +387,7 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
         uref_attach_ubuf(uref, header);
         uref_block_set_header_size(uref, 8);
 
-        upipe_dbg_va(upipe, "received dated buffer: PROG %"PRId64" ORIG %"PRId64
+        if (0) upipe_dbg_va(upipe, "received dated buffer: PROG %"PRId64" ORIG %"PRId64
                 " SYS %"PRId64" TIMESTAMP %"PRIu64,
                 cr_prog, cr_orig, cr_sys, timestamp.pcr);
     }
@@ -420,7 +420,7 @@ static bool upipe_dveo_asi_sink_output(struct upipe *upipe, struct uref *uref,
 #if EAGAIN != EWOULDBLOCK
                 case EWOULDBLOCK:
 #endif
-                    upipe_notice_va(upipe, "polling");
+                    //upipe_notice_va(upipe, "polling");
                     upipe_dveo_asi_sink_poll(upipe);
                     return false;
                 default:
