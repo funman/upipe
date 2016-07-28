@@ -85,8 +85,6 @@ struct upipe_dveo_asi_sink {
     struct upump_mgr *upump_mgr;
     /** write watcher */
     struct upump *upump;
-    /** sync watcher */
-    struct upump *upump_sync;
 
     /** delay applied to system clock ref when uclock is provided */
     uint64_t latency;
@@ -123,7 +121,6 @@ UPIPE_HELPER_UREFCOUNT(upipe_dveo_asi_sink, urefcount, upipe_dveo_asi_sink_free)
 UPIPE_HELPER_VOID(upipe_dveo_asi_sink)
 UPIPE_HELPER_UPUMP_MGR(upipe_dveo_asi_sink, upump_mgr)
 UPIPE_HELPER_UPUMP(upipe_dveo_asi_sink, upump, upump_mgr)
-UPIPE_HELPER_UPUMP(upipe_dveo_asi_sink, upump_sync, upump_mgr)
 UPIPE_HELPER_INPUT(upipe_dveo_asi_sink, urefs, nb_urefs, max_urefs, blockers, upipe_dveo_asi_sink_output)
 UBASE_FROM_TO(uclock_dveo_asi_sink, uclock, uclock, uclock)
 UBASE_FROM_TO(uclock_dveo_asi_sink, urefcount, urefcount, urefcount)
