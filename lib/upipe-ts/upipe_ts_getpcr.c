@@ -198,8 +198,10 @@ static void upipe_ts_getpcr_input(struct upipe *upipe, struct uref *uref,
 
     bool discontinuity = ubase_check(uref_flow_get_discontinuity(uref));
 
-    if (upipe_ts_getpcr->new_pcr_pid_count > 20)
+    if (upipe_ts_getpcr->new_pcr_pid_count > 20) {
+        upipe_ts_getpcr->pcr_pid = 0xffff;
         discontinuity = 1;
+    }
 
     /* packet real-time arrival */
 #define MAX_IAT (UCLOCK_FREQ / 10) /* 100ms */
