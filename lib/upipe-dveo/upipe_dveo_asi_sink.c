@@ -619,7 +619,7 @@ static int upipe_dveo_asi_sink_open(struct upipe *upipe)
     }
 
     snprintf(sys, sizeof(sys), sys_fmt, upipe_dveo_asi_sink->card_idx, "buffers");
-    snprintf(buf, sizeof(buf), "%u\n", 10);
+    snprintf(buf, sizeof(buf), "%u\n", 100);
     if (util_write(sys, buf, sizeof(buf)) < 0) {
         upipe_err_va(upipe, "Couldn't set # of buffers (%m)");
         return UBASE_ERR_EXTERNAL;
