@@ -108,8 +108,11 @@ UPIPE_HELPER_UBUF_MGR(upipe_s337_encaps, ubuf_mgr, flow_format, ubuf_mgr_request
 
 static int upipe_s337_encaps_check(struct upipe *upipe, struct uref *flow_format)
 {
-    if (flow_format != NULL)
+    if (flow_format != NULL) {
+        uref_attr_set_small_unsigned(flow_format, S337_TYPE_A52,
+                UDICT_TYPE_SMALL_UNSIGNED, "data_type");
         upipe_s337_encaps_store_flow_def(upipe, flow_format);
+    }
 
     bool was_buffered = !upipe_s337_encaps_check_input(upipe);
     upipe_s337_encaps_output_input(upipe);
