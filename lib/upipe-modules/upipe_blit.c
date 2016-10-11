@@ -798,6 +798,7 @@ static void upipe_blit_sort(struct upipe *upipe)
  * @param upump_p reference to pump that generated the buffer
  *
  */
+    static int _upipe_blit_prepare(struct upipe *upipe);
 static void upipe_blit_input(struct upipe *upipe, struct uref *uref, 
                              struct upump **upump_p)
 {
@@ -810,6 +811,7 @@ static void upipe_blit_input(struct upipe *upipe, struct uref *uref,
 
     uref_free(upipe_blit->uref);
     upipe_blit->uref = uref;
+    _upipe_blit_prepare(upipe);
 }
 
 /** @internal @This sets the input flow definition.
