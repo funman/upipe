@@ -261,7 +261,7 @@ struct upipe_bmd_sink_sub {
     /** whether this is an audio pipe */
     bool sound;
 
-    bool s302m;
+    bool dolby_e;
 
     /** position in the SDI stream */
     uint8_t channel_idx;
@@ -972,7 +972,7 @@ static void copy_samples(upipe_bmd_sink_sub *upipe_bmd_sink_sub,
     uint8_t idx = upipe_bmd_sink_sub->channel_idx;
     int32_t *out = upipe_bmd_sink->audio_buf;
 
-    if (upipe_bmd_sink_sub->s302m) {
+    if (upipe_bmd_sink_sub->dolby_e) {
         if (upipe_bmd_sink->line21_offset >= samples) {
             upipe_err_va(upipe, "offsetting for line21 would overflow audio: "
                 "offset %"PRIu64" + line 21 %hu, %"PRIu64" samples",
@@ -1069,7 +1069,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
                 continue;
             }
 
-            if (upipe_bmd_sink_sub->s302m) {
+            if (upipe_bmd_sink_sub->dolby_e) {
                 /* do not drop first samples of s337 */
                 drop_duration = 0;
             }
@@ -1105,7 +1105,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
             break;
         }
 
-        if (upipe_bmd_sink_sub->s302m) {
+        if (upipe_bmd_sink_sub->dolby_e) {
             /* do not drop last samples of s337 */
             time_offset = 0;
             pts = video_pts;
@@ -1145,7 +1145,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
         /* read the samples into our final buffer */
         copy_samples(upipe_bmd_sink_sub, uref, samples_offset, missing_samples);
 
-        if (0 && upipe_bmd_sink_sub->s302m)
+        if (0 && upipe_bmd_sink_sub->dolby_e)
             start_code(upipe_bmd_sink->audio_buf, upipe_bmd_sink_sub->channel_idx,
                     samples);
 
@@ -1543,7 +1543,7 @@ static bool upipe_bmd_sink_sub_output(struct upipe *upipe, struct uref *uref)
         upipe_dbg_va(upipe, "latency %"PRIu64, upipe_bmd_sink_sub->latency);
         uint8_t data_type = 0;
         uref_attr_get_small_unsigned(uref, &data_type, UDICT_TYPE_SMALL_UNSIGNED, "data_type");
-        upipe_bmd_sink_sub->s302m = data_type == 28; // dolby e, see s338m
+        upipe_bmd_sink_sub->dolby_e = data_type == 28; // dolby e, see s338m
         upipe_bmd_sink_sub_check_upump_mgr(upipe);
 
         uref_free(uref);
