@@ -2029,6 +2029,7 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
     /* disable video the shortest time possible, to keep clock running */
 
     upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
+    uqueue_uref_flush(&upipe_bmd_sink->pic_subpipe.uqueue);
     deckLinkOutput->DisableVideoOutput();
     upipe_bmd_sink->ticks_per_frame = 0;
     result = deckLinkOutput->EnableVideoOutput(displayMode->GetDisplayMode(),
