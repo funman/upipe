@@ -73,6 +73,8 @@
 
 #include <pthread.h>
 
+#include <bitstream/smpte/337.h>
+
 #include "include/DeckLinkAPI.h"
 
 #define PREROLL_FRAMES 3
@@ -262,6 +264,8 @@ struct upipe_bmd_sink_sub {
     bool sound;
 
     bool dolby_e;
+
+    bool a52;
 
     /** position in the SDI stream */
     uint8_t channel_idx;
@@ -1069,7 +1073,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
                 continue;
             }
 
-            if (upipe_bmd_sink_sub->dolby_e) {
+            if (upipe_bmd_sink_sub->dolby_e || upipe_bmd_sink_sub->a52) {
                 /* do not drop first samples of s337 */
                 drop_duration = 0;
             }
@@ -1105,7 +1109,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
             break;
         }
 
-        if (upipe_bmd_sink_sub->dolby_e) {
+        if (upipe_bmd_sink_sub->dolby_e || upipe_bmd_sink_sub->a52) {
             /* do not drop last samples of s337 */
             time_offset = 0;
             pts = video_pts;
@@ -1544,6 +1548,8 @@ static bool upipe_bmd_sink_sub_output(struct upipe *upipe, struct uref *uref)
         uint8_t data_type = 0;
         uref_attr_get_small_unsigned(uref, &data_type, UDICT_TYPE_SMALL_UNSIGNED, "data_type");
         upipe_bmd_sink_sub->dolby_e = data_type == 28; // dolby e, see s338m
+        upipe_bmd_sink_sub->a52 = data_type == S337_TYPE_A52 ||
+                                  data_type == S337_TYPE_A52E;
         upipe_bmd_sink_sub_check_upump_mgr(upipe);
 
         uref_free(uref);
