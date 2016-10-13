@@ -548,6 +548,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         ancillary->GetBufferForVerticalBlankingLine(OP47_LINE1 + 563*i, &vanc);
         sdi_clear_vanc(buf);
 
+        // XXX: should counter be per-field?
         uint16_t *ctr = &upipe_bmd_sink->op47_sequence_counter[i];
 
         int idx = OP47_STRUCT_B_OFFSET + 45 * packets[i];
