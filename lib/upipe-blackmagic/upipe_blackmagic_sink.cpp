@@ -77,24 +77,11 @@
 
 #include "include/DeckLinkAPI.h"
 
+#include "sdi.h"
+
 #define PREROLL_FRAMES 3
 
 #define DECKLINK_CHANNELS 16
-
-#define CC_LINE 9
-#define AFD_LINE 11
-#define OP47_LINE1 12
-#define OP47_LINE2 (OP47_LINE1+563)
-
-#define PAL_FIELD_OFFSET 313
-
-#define ANC_START_LEN   6
-#define CDP_HEADER_SIZE 7
-#define OP47_INITIAL_WORDS 4
-#define OP47_STRUCT_A_LEN 5
-#define OP47_STRUCT_B_OFFSET (ANC_START_LEN+OP47_INITIAL_WORDS+OP47_STRUCT_A_LEN)
-
-#define VANC_WIDTH 1920
 
 /* don't clip the v210 anc data */
 #define WRITE_PIXELS(a, b, c)           \
@@ -462,14 +449,6 @@ private:
     struct upipe_bmd_sink *upipe_bmd_sink;
 };
 
-static const bool parity_tab[256] =
-{
-#   define P2(n) n, n^1, n^1, n
-#   define P4(n) P2(n), P2(n^1), P2(n^1), P2(n)
-#   define P6(n) P4(n), P4(n^1), P4(n^1), P4(n)
-    P6(0), P6(1), P6(1), P6(0)
-};
-
 static void upipe_bmd_sink_clear_vbi(uint8_t *dst, int w)
 {
     int i;
@@ -585,30 +564,6 @@ static void upipe_bmd_sink_write_cdp(struct upipe *upipe, const uint8_t *src,
     upipe_bmd_sink_write_cdp_header(upipe, dst);
     upipe_bmd_sink_write_ccdata_section(upipe, &dst[CDP_HEADER_SIZE], src, src_size);
     upipe_bmd_sink_write_cdp_footer(upipe, &dst[CDP_HEADER_SIZE+src_size+2]);
-}
-
-static void upipe_bmd_sink_calc_parity_checksum(struct upipe *upipe, int f2)
-{
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-    uint16_t i;
-    uint16_t dc = *upipe_bmd_sink->dc[f2];
-    uint16_t checksum = 0;
-    uint16_t *buf = upipe_bmd_sink->vanc_tmp[f2];
-
-    /* +3 = did + sdid + dc itself */
-    for( i = 0; i < dc+3; i++ )
-    {
-        uint8_t parity = parity_tab[buf[3+i] & 0xff];
-        buf[3+i] |= (!parity << 9) | (parity << 8);
-
-        checksum += buf[3+i] & 0x1ff;
-    }
-
-    checksum &= 0x1ff;
-    checksum |= (!(checksum >> 8)) << 9;
-
-    buf[ANC_START_LEN+dc] = checksum;
 }
 
 static void upipe_bmd_sink_encode_v210(struct upipe *upipe, uint32_t *dst, int field, int vbi)
@@ -811,7 +766,9 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         for (int i = 0; i < 2; i++) {
             if (upipe_bmd_sink->op47_number_of_packets[i]) {
                 upipe_bmd_sink_write_op47_footer(upipe, i);
-                upipe_bmd_sink_calc_parity_checksum(upipe, i);
+
+                sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[i],
+                        upipe_bmd_sink->dc[i][0]);
                 upipe_bmd_sink_encode_v210(upipe, (uint32_t*)vanc[i], i, 0);
             }
         }
@@ -1306,7 +1263,8 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
         upipe_bmd_sink_clear_vanc(upipe_bmd_sink->vanc_tmp[0]);
         upipe_bmd_sink_start_anc(upipe, upipe_bmd_sink->vanc_tmp[0], 0, 0x61, 0x1);
         upipe_bmd_sink_write_cdp(upipe, pic_data, pic_data_size, &upipe_bmd_sink->vanc_tmp[0][ANC_START_LEN]);
-        upipe_bmd_sink_calc_parity_checksum(upipe, 0);
+        sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[0],
+                upipe_bmd_sink->dc[0][0]);
 
         upipe_bmd_sink_encode_v210(upipe, (uint32_t*)vanc, 0, sd);
     }

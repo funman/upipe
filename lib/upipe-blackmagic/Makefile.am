@@ -7,6 +7,7 @@ libupipe_blackmagic_la_SOURCES = ubuf_pic_blackmagic.cpp \
                                  upipe_blackmagic_extract_vanc.cpp \
                                  upipe_blackmagic_sink.cpp \
                                  include/DeckLinkAPIDispatch.cpp \
+                                 sdi.c \
                                  $(NULL)
 
 EXTRA_libupipe_blackmagic_la_SOURCES = include/DeckLinkAPIConfiguration.h \
@@ -16,7 +17,8 @@ EXTRA_libupipe_blackmagic_la_SOURCES = include/DeckLinkAPIConfiguration.h \
                                        include/DeckLinkAPIModes.h \
                                        include/DeckLinkAPITypes.h \
                                        include/DeckLinkAPIVersion.h \
-                                       include/LinuxCOM.h
+                                       include/LinuxCOM.h \
+                                       sdi.h
 
 
 libupipe_blackmagic_la_CPPFLAGS = -I$(top_builddir)/include -I$(top_srcdir)/include
