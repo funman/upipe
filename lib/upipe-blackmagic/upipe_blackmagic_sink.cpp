@@ -514,14 +514,10 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
             buf[ANC_START_LEN+2] = 0x0;
 
             /* Format code */
-            buf[ANC_START_LEN+3] = 0x2;
+            buf[ANC_START_LEN+3] = 0x2; /* WST Teletext subtitles */
 
-            /* Data Adaption header */
-            buf[ANC_START_LEN+4] = 0x0;
-            buf[ANC_START_LEN+5] = 0x0;
-            buf[ANC_START_LEN+6] = 0x0;
-            buf[ANC_START_LEN+7] = 0x0;
-            buf[ANC_START_LEN+8] = 0x0;
+            /* Data Adaption header, 5 packets max */
+            memset(&buf[ANC_START_LEN + OP47_INITIAL_WORDS], 0x00, 5);
         } else if (packets[f2] >= 5) {
             break;
         }
@@ -534,11 +530,10 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
 
         /* 2x Run in codes */
         memset(&buf[idx], 0x55, 2);
-        idx += 2;
 
         /* Framing code, MRAG and the data */
-        for (int i = 1; i < 44; i++)
-            buf[idx++] = REVERSE(pic_data[2 + i]);
+        for (int i = 0; i < 43; i++)
+            buf[idx + 2 + i] = REVERSE(pic_data[3 + i]);
 
         packets[f2]++;
     }
