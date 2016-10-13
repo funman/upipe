@@ -429,16 +429,9 @@ private:
     struct upipe_bmd_sink *upipe_bmd_sink;
 };
 
-static void upipe_bmd_sink_write_op47_header(struct upipe *upipe, int field)
+static void sdi_write_op47_header(uint16_t *buf, uint16_t **dc)
 {
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-
-    uint16_t *buf = upipe_bmd_sink->vanc_tmp[field];
-
-    /* Populates upipe_bmd_sink->dc with an address to
-     * use later on */
-    upipe_bmd_sink->dc[field] = sdi_start_anc(buf, 0x43, 0x2);
+    *dc = sdi_start_anc(buf, 0x43, 0x2);
 
     /* 2 identifiers */
     buf[ANC_START_LEN]   = 0x51;
@@ -458,47 +451,35 @@ static void upipe_bmd_sink_write_op47_header(struct upipe *upipe, int field)
     buf[ANC_START_LEN+8] = 0x0;
 }
 
-static void upipe_bmd_sink_write_op47_packet(struct upipe *upipe, const uint8_t *data,
-                                             uint8_t line_offset, uint8_t f2)
+static void sdi_write_op47_packet(uint16_t *buf, const uint8_t *data,
+        uint8_t line_offset, uint8_t f2, int packets)
 {
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-
-    uint16_t *buf = upipe_bmd_sink->vanc_tmp[f2];
-
     /* Write structure A */
-    int num_packets = upipe_bmd_sink->op47_number_of_packets[f2];
-    buf[ANC_START_LEN + OP47_INITIAL_WORDS + num_packets]  = ((!f2) << 7) | line_offset;
+    buf[ANC_START_LEN + OP47_INITIAL_WORDS + packets]  = ((!f2) << 7) | line_offset;
 
     /* Structure B */
-    int idx = OP47_STRUCT_B_OFFSET + 45*num_packets;
+    int idx = OP47_STRUCT_B_OFFSET + 45 * packets;
 
     /* 2x Run in codes */
-    buf[idx++] = 0x55;
-    buf[idx++] = 0x55;
+    memset(&buf[idx], 0x55, 2);
+    idx += 2;
 
     /* Framing code, MRAG and the data */
     for (int i = 1; i < 44; i++)
-        buf[idx++] = REVERSE( data[i] );
-
-    upipe_bmd_sink->op47_number_of_packets[f2]++;
+        buf[idx++] = REVERSE(data[i]);
 }
 
-static void upipe_bmd_sink_write_op47_footer(struct upipe *upipe, int f2)
+static uint16_t sdi_write_op47_footer(uint16_t *buf, int pkts, uint16_t *ctr)
 {
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-
-    uint16_t *buf = upipe_bmd_sink->vanc_tmp[f2];
-    int idx = OP47_STRUCT_B_OFFSET + 45*upipe_bmd_sink->op47_number_of_packets[f2];
+    int idx = OP47_STRUCT_B_OFFSET + 45 * pkts;
 
     /* Footer ID */
     buf[idx++] = 0x74;
 
     /* Sequence counter, MSB and LSB */
-    upipe_bmd_sink->op47_sequence_counter[f2]++;
-    buf[idx++] = (upipe_bmd_sink->op47_sequence_counter[f2] >> 8) & 0xff;
-    buf[idx++] = (upipe_bmd_sink->op47_sequence_counter[f2] >> 0) & 0xff;
+    const uint16_t sequence_counter = (*ctr)++;
+    buf[idx++] = (sequence_counter >> 8) & 0xff;
+    buf[idx++] = (sequence_counter     ) & 0xff;
 
     /* Write UDW length (includes checksum so do it before) */
     buf[ANC_START_LEN+2] = idx + 1 - ANC_START_LEN;
@@ -509,8 +490,7 @@ static void upipe_bmd_sink_write_op47_footer(struct upipe *upipe, int f2)
         checksum += buf[i];
     buf[idx++] = checksum ? 256 - checksum : 0;
 
-    /* Write ADF DC */
-    *upipe_bmd_sink->dc[f2] = idx - ANC_START_LEN;
+    return idx - ANC_START_LEN;
 }
 
 /* VBI Teletext */
@@ -533,8 +513,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         upipe_bmd_sink->op47_number_of_packets[0] = upipe_bmd_sink->op47_number_of_packets[1] = 0;
     }
 
-    while (pic_data_size >= 46)
-    {
+    while (pic_data_size >= 46) {
         uint8_t data_unit_id = pic_data[0];
         if (data_unit_id == 0x2 || data_unit_id == 0x3) {
             uint8_t data_unit_len = pic_data[1];
@@ -566,10 +545,15 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
                                 (uint8_t*)&upipe_bmd_sink->vanc_tmp[0][0],
                                 upipe_bmd_sink->displayMode->GetWidth());
                     } else {
-                        if (!upipe_bmd_sink->op47_number_of_packets[f2])
-                            upipe_bmd_sink_write_op47_header(upipe, f2);
-                        if (upipe_bmd_sink->op47_number_of_packets[f2] < 5)
-                            upipe_bmd_sink_write_op47_packet(upipe, &pic_data[2], line_offset, f2);
+                        int packets = upipe_bmd_sink->op47_number_of_packets[f2];
+                        uint16_t *buf = upipe_bmd_sink->vanc_tmp[f2];
+
+                        if (packets == 0)
+                            sdi_write_op47_header(buf, &upipe_bmd_sink->dc[f2]);
+                        if (packets < 5) {
+                            sdi_write_op47_packet(buf, &pic_data[2], line_offset, f2, packets);
+                            upipe_bmd_sink->op47_number_of_packets[f2]++;
+                        }
                     }
                 }
             }
@@ -579,18 +563,25 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         pic_data_size -= 46;
     }
 
-    if (!sd) {
-        for (int i = 0; i < 2; i++) {
-            if (upipe_bmd_sink->op47_number_of_packets[i]) {
-                upipe_bmd_sink_write_op47_footer(upipe, i);
+    if (sd)
+        return;
 
-                sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[i],
-                        upipe_bmd_sink->dc[i][0]);
-                sdi_encode_v210((uint32_t*)vanc[i],
-                        &upipe_bmd_sink->vanc_tmp[i][0],
-                        upipe_bmd_sink->displayMode->GetWidth());
-            }
-        }
+    for (int i = 0; i < 2; i++) {
+        if (upipe_bmd_sink->op47_number_of_packets[i] == 0)
+            continue;
+
+        /* Write ADF DC */
+        *upipe_bmd_sink->dc[i] = sdi_write_op47_footer(
+                upipe_bmd_sink->vanc_tmp[i],
+                upipe_bmd_sink->op47_number_of_packets[i],
+                &upipe_bmd_sink->op47_sequence_counter[i]
+                );
+
+        sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[i],
+                upipe_bmd_sink->dc[i][0]);
+        sdi_encode_v210((uint32_t*)vanc[i],
+                &upipe_bmd_sink->vanc_tmp[i][0],
+                upipe_bmd_sink->displayMode->GetWidth());
     }
 }
 
