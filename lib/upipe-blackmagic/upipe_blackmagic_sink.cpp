@@ -449,74 +449,6 @@ private:
     struct upipe_bmd_sink *upipe_bmd_sink;
 };
 
-static void upipe_bmd_sink_write_cdp_header(struct upipe *upipe, uint16_t *dst)
-{
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-
-    /** XXX: Support crazy 25fps captions? **/
-    uint8_t fps = upipe_bmd_sink->mode == bmdModeNTSC ||
-                  upipe_bmd_sink->mode == bmdModeHD1080i5994 ? 0x4 : 0x7;
-
-    dst[0] = 0x96;
-    dst[1] = 0x69;
-    dst[2] = 0; // cdp_length
-    dst[3] = (fps << 4) | 0xf; // cdp_frame_rate | Reserved
-    dst[4] = (1 << 6) | (1 << 1) | 1; // ccdata_present | caption_service_active | Reserved
-    dst[5] = upipe_bmd_sink->cdp_hdr_sequence_cntr >> 8;
-    dst[6] = upipe_bmd_sink->cdp_hdr_sequence_cntr & 0xff;
-
-    *upipe_bmd_sink->dc[0] += CDP_HEADER_SIZE;
-}
-
-static void upipe_bmd_sink_write_ccdata_section(struct upipe *upipe, uint16_t *dst,
-                                                const uint8_t *src, size_t src_size)
-{
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-    size_t i;
-
-    dst[0] = 0x72;
-    dst[1] = (0x7 << 5) | (src_size / 3);
-    dst += 2;
-
-    for (i = 0; i < src_size; i++)
-        dst[i] = src[i];
-
-    *upipe_bmd_sink->dc[0] += src_size+2;
-}
-
-static void upipe_bmd_sink_write_cdp_footer(struct upipe *upipe, uint16_t *dst)
-{
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-    uint8_t checksum = 0, cnt = 0;
-    int i;
-
-    dst[0] = 0x74;
-    dst[1] = upipe_bmd_sink->cdp_hdr_sequence_cntr >> 8;
-    dst[2] = upipe_bmd_sink->cdp_hdr_sequence_cntr & 0xff;
-
-    upipe_bmd_sink->cdp_hdr_sequence_cntr++;
-
-    *upipe_bmd_sink->dc[0] += 4;
-    cnt = *upipe_bmd_sink->dc[0];
-    upipe_bmd_sink->vanc_tmp[0][ANC_START_LEN+2] = cnt; // set cdp length
-
-    for( i = 0; i < cnt-1; i++ ) // don't include checksum
-        checksum += upipe_bmd_sink->vanc_tmp[0][ANC_START_LEN+i];
-
-    dst[3] = checksum ? 256 - checksum : 0;
-}
-
-static void upipe_bmd_sink_write_cdp(struct upipe *upipe, const uint8_t *src,
-                                     size_t src_size, uint16_t *dst)
-{
-    upipe_bmd_sink_write_cdp_header(upipe, dst);
-    upipe_bmd_sink_write_ccdata_section(upipe, &dst[CDP_HEADER_SIZE], src, src_size);
-    upipe_bmd_sink_write_cdp_footer(upipe, &dst[CDP_HEADER_SIZE+src_size+2]);
-}
-
 static void upipe_bmd_sink_encode_v210(struct upipe *upipe, uint32_t *dst, int field, int vbi)
 {
     struct upipe_bmd_sink *upipe_bmd_sink =
@@ -1209,11 +1141,16 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
 
     if( ntsc && pic_data_size > 0 )
     {
+        /** XXX: Support crazy 25fps captions? **/
+        const uint8_t fps = upipe_bmd_sink->mode == bmdModeNTSC ||
+            upipe_bmd_sink->mode == bmdModeHD1080i5994 ? 0x4 : 0x7;
         void *vanc;
         ancillary->GetBufferForVerticalBlankingLine(CC_LINE, &vanc);
         sdi_clear_vanc(upipe_bmd_sink->vanc_tmp[0]);
         upipe_bmd_sink->dc[0] = sdi_start_anc(upipe_bmd_sink->vanc_tmp[0], 0x61, 0x1);
-        upipe_bmd_sink_write_cdp(upipe, pic_data, pic_data_size, &upipe_bmd_sink->vanc_tmp[0][ANC_START_LEN]);
+        *upipe_bmd_sink->dc[0] = sdi_write_cdp(pic_data, pic_data_size,
+                &upipe_bmd_sink->vanc_tmp[0][ANC_START_LEN],
+                &upipe_bmd_sink->cdp_hdr_sequence_cntr, fps);
         sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[0],
                 upipe_bmd_sink->dc[0][0]);
 
