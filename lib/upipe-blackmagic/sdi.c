@@ -103,51 +103,52 @@ static inline uint32_t to_le32(uint32_t a)
 #endif
 }
 
-void sdi_encode_v210(uint32_t *dst, uint16_t *src, int vbi, int width)
+void sdi_encode_v210_sd(uint32_t *dst, uint8_t *src, int width)
 {
-    if (vbi) {
-        uint8_t *y = (uint8_t*)src;
-        uint8_t *u = &y[width];
+    uint8_t *y = src;
+    uint8_t *u = &y[width];
 
 #define WRITE_PIXELS8(a, b, c) \
-        *dst++ = to_le32((*(a) << 2) | (*(b) << 12) | (*(c) << 22))
+    *dst++ = to_le32((*(a) << 2) | (*(b) << 12) | (*(c) << 22))
 
-        for (int w = 0; w < width; w += 6) {
-            WRITE_PIXELS8(u, y, u+1);
-            y += 1;
-            u += 2;
-            WRITE_PIXELS8(y, u, y+1);
-            y += 2;
-            u += 1;
-            WRITE_PIXELS8(u, y, u+1);
-            y += 1;
-            u += 2;
-            WRITE_PIXELS8(y, u, y+1);
-            y += 2;
-            u += 1;
-        }
-    } else {
-        /* 1280 isn't mod-6 so long vanc packets will be truncated */
-        uint16_t *y = src;
-        uint16_t *u = &y[width];
+    for (int w = 0; w < width; w += 6) {
+        WRITE_PIXELS8(u, y, u+1);
+        y += 1;
+        u += 2;
+        WRITE_PIXELS8(y, u, y+1);
+        y += 2;
+        u += 1;
+        WRITE_PIXELS8(u, y, u+1);
+        y += 1;
+        u += 2;
+        WRITE_PIXELS8(y, u, y+1);
+        y += 2;
+        u += 1;
+    }
+}
 
-/* don't clip the v210 anc data */
+void sdi_encode_v210(uint32_t *dst, uint16_t *src, int width)
+{
+    /* 1280 isn't mod-6 so long vanc packets will be truncated */
+    uint16_t *y = src;
+    uint16_t *u = &y[width];
+
+    /* don't clip the v210 anc data */
 #define WRITE_PIXELS(a, b, c)           \
-        *dst++ = to_le32(*(a) | (*(b) << 10) | (*(c) << 20))
+    *dst++ = to_le32(*(a) | (*(b) << 10) | (*(c) << 20))
 
-        for (int w = 0; w < width; w += 6) {
-            WRITE_PIXELS(u, y, u+1);
-            y += 1;
-            u += 2;
-            WRITE_PIXELS(y, u, y+1);
-            y += 2;
-            u += 1;
-            WRITE_PIXELS(u, y, u+1);
-            y += 1;
-            u += 2;
-            WRITE_PIXELS(y, u, y+1);
-            y += 2;
-            u += 1;
-        }
+    for (int w = 0; w < width; w += 6) {
+        WRITE_PIXELS(u, y, u+1);
+        y += 1;
+        u += 2;
+        WRITE_PIXELS(y, u, y+1);
+        y += 2;
+        u += 1;
+        WRITE_PIXELS(u, y, u+1);
+        y += 1;
+        u += 2;
+        WRITE_PIXELS(y, u, y+1);
+        y += 2;
+        u += 1;
     }
 }

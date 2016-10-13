@@ -562,8 +562,8 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
                                                           upipe_bmd_sink->sliced, 1);
 
                         ancillary->GetBufferForVerticalBlankingLine(line, &vanc[0]);
-                        sdi_encode_v210((uint32_t*)vanc[0],
-                                &upipe_bmd_sink->vanc_tmp[0][0], 1,
+                        sdi_encode_v210_sd((uint32_t*)vanc[0],
+                                (uint8_t*)&upipe_bmd_sink->vanc_tmp[0][0],
                                 upipe_bmd_sink->displayMode->GetWidth());
                     } else {
                         if (!upipe_bmd_sink->op47_number_of_packets[f2])
@@ -587,7 +587,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
                 sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[i],
                         upipe_bmd_sink->dc[i][0]);
                 sdi_encode_v210((uint32_t*)vanc[i],
-                        &upipe_bmd_sink->vanc_tmp[i][0], 0,
+                        &upipe_bmd_sink->vanc_tmp[i][0],
                         upipe_bmd_sink->displayMode->GetWidth());
             }
         }
@@ -1090,9 +1090,12 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
         sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[0],
                 upipe_bmd_sink->dc[0][0]);
 
-        sdi_encode_v210((uint32_t*)vanc,
-                &upipe_bmd_sink->vanc_tmp[0][0], sd,
-                upipe_bmd_sink->displayMode->GetWidth());
+        if (sd)
+            sdi_encode_v210_sd((uint32_t*)vanc,
+                    (uint8_t*)&upipe_bmd_sink->vanc_tmp[0][0], w);
+        else
+            sdi_encode_v210((uint32_t*)vanc,
+                    &upipe_bmd_sink->vanc_tmp[0][0], w);
     }
 
     /* Loop through subpic data */

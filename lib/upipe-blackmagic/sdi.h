@@ -25,4 +25,5 @@ uint16_t *sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid);
 uint16_t sdi_write_cdp(const uint8_t *src, size_t src_size,
         uint16_t *dst, uint16_t *ctr, uint8_t fps);
 
-void sdi_encode_v210(uint32_t *dst, uint16_t *src, int vbi, int width);
+void sdi_encode_v210_sd(uint32_t *dst, uint8_t *src, int width);
+void sdi_encode_v210(uint32_t *dst, uint16_t *src, int width);
