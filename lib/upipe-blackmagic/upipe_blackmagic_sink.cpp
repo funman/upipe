@@ -441,6 +441,8 @@ static void upipe_bmd_sink_extract_ttx_sd(struct upipe *upipe, IDeckLinkVideoFra
             continue;
 
         uint8_t line_offset = pic_data[2] & 0x1f;
+        // XXX: verify. 1 means first field
+        // according to EN 300 472
         uint8_t f2 = (pic_data[2] >> 5) & 1;
         uint16_t line = line_offset + PAL_FIELD_OFFSET * f2;
         if (line == 0)
@@ -491,6 +493,8 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
             continue;
 
         uint8_t line_offset = pic_data[2] & 0x1f;
+        // XXX: verify. 1 means first field
+        // according to EN 300 472
         uint8_t f2 = (pic_data[2] >> 5) & 1;
         uint16_t line = line_offset + PAL_FIELD_OFFSET * f2;
 
