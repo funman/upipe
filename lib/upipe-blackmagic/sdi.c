@@ -11,9 +11,10 @@ static const bool parity_tab[256] =
     P6(0), P6(1), P6(1), P6(0)
 };
 
-void sdi_calc_parity_checksum(uint16_t *buf, uint16_t dc)
+void sdi_calc_parity_checksum(uint16_t *buf)
 {
     uint16_t checksum = 0;
+    uint16_t dc = buf[DC_POS];
 
     /* +3 = did + sdid + dc itself */
     for (uint16_t i = 0; i < dc+3; i++) {
@@ -46,7 +47,7 @@ void sdi_clear_vanc(uint16_t *dst)
         dst[i] = 0x200;
 }
 
-uint16_t *sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid)
+void sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid)
 {
     /* ADF */
     dst[0] = 0x000;
@@ -58,11 +59,9 @@ uint16_t *sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid)
     dst[4] = sdid;
     /* DC */
     dst[5] = 0;
-
-    return &dst[5];
 }
 
-uint16_t sdi_write_cdp(const uint8_t *src, size_t src_size,
+void sdi_write_cdp(const uint8_t *src, size_t src_size,
         uint16_t *dst, uint16_t *ctr, uint8_t fps)
 {
     const uint8_t cnt = 9 + src_size + 4;
@@ -91,7 +90,7 @@ uint16_t sdi_write_cdp(const uint8_t *src, size_t src_size,
 
     dst[9 + src_size + 3] = checksum ? 256 - checksum : 0;
 
-    return cnt;
+    dst[-1] = cnt; // DC
 }
 
 static inline uint32_t to_le32(uint32_t a)
