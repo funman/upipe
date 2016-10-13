@@ -449,55 +449,6 @@ private:
     struct upipe_bmd_sink *upipe_bmd_sink;
 };
 
-static void upipe_bmd_sink_clear_vbi(uint8_t *dst, int w)
-{
-    int i;
-
-    for (i = 0; i < w; i++)
-        dst[i] = 0x10;
-
-    dst += w;
-
-    for (i = 0; i < w; i++)
-        dst[i] = 0x80;
-}
-
-static void upipe_bmd_sink_clear_vanc(uint16_t *dst)
-{
-    int i;
-
-    for (i = 0; i < VANC_WIDTH; i++)
-        dst[i] = 0x40;
-
-    dst += VANC_WIDTH;
-
-    for (i = 0; i < VANC_WIDTH; i++)
-        dst[i] = 0x200;
-}
-
-/* XXX: put this somewhere */
-static void upipe_bmd_sink_start_anc(struct upipe *upipe, uint16_t *dst,
-                                     int field, uint16_t did, uint16_t sdid)
-{
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-
-    /* reset dc */
-    upipe_bmd_sink->dc[field] = 0;
-
-    /* ADF */
-    dst[0] = 0x000;
-    dst[1] = 0x3ff;
-    dst[2] = 0x3ff;
-    /* DID */
-    dst[3] = did;
-    /* SDID */
-    dst[4] = sdid;
-    /* DC */
-    dst[5] = 0;
-    upipe_bmd_sink->dc[field] = &dst[5];
-}
-
 static void upipe_bmd_sink_write_cdp_header(struct upipe *upipe, uint16_t *dst)
 {
     struct upipe_bmd_sink *upipe_bmd_sink =
@@ -623,7 +574,7 @@ static void upipe_bmd_sink_write_op47_header(struct upipe *upipe, int field)
 
     /* Populates upipe_bmd_sink->dc with an address to
      * use later on */
-    upipe_bmd_sink_start_anc(upipe, buf, field, 0x43, 0x2);
+    upipe_bmd_sink->dc[field] = sdi_start_anc(buf, 0x43, 0x2);
 
     /* 2 identifiers */
     buf[ANC_START_LEN]   = 0x51;
@@ -710,10 +661,10 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
 
     if(!sd) {
         ancillary->GetBufferForVerticalBlankingLine(OP47_LINE1, &vanc[0]);
-        upipe_bmd_sink_clear_vanc(upipe_bmd_sink->vanc_tmp[0]);
+        sdi_clear_vanc(upipe_bmd_sink->vanc_tmp[0]);
 
         ancillary->GetBufferForVerticalBlankingLine(OP47_LINE2, &vanc[1]);
-        upipe_bmd_sink_clear_vanc(upipe_bmd_sink->vanc_tmp[1]);
+        sdi_clear_vanc(upipe_bmd_sink->vanc_tmp[1]);
 
         upipe_bmd_sink->op47_number_of_packets[0] = upipe_bmd_sink->op47_number_of_packets[1] = 0;
     }
@@ -731,7 +682,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
                     /* Setup libzvbi or OP-47 */
                     if (sd) {
                         uint8_t *buf = (uint8_t*)upipe_bmd_sink->vanc_tmp[0];
-                        upipe_bmd_sink_clear_vbi(buf, 720);
+                        sdi_clear_vbi(buf, 720);
 
                         upipe_bmd_sink->sp.start[f2] = line;
                         upipe_bmd_sink->sp.count[f2] = 1;
@@ -1260,8 +1211,8 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
     {
         void *vanc;
         ancillary->GetBufferForVerticalBlankingLine(CC_LINE, &vanc);
-        upipe_bmd_sink_clear_vanc(upipe_bmd_sink->vanc_tmp[0]);
-        upipe_bmd_sink_start_anc(upipe, upipe_bmd_sink->vanc_tmp[0], 0, 0x61, 0x1);
+        sdi_clear_vanc(upipe_bmd_sink->vanc_tmp[0]);
+        upipe_bmd_sink->dc[0] = sdi_start_anc(upipe_bmd_sink->vanc_tmp[0], 0x61, 0x1);
         upipe_bmd_sink_write_cdp(upipe, pic_data, pic_data_size, &upipe_bmd_sink->vanc_tmp[0][ANC_START_LEN]);
         sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[0],
                 upipe_bmd_sink->dc[0][0]);

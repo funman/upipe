@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <string.h>
 
 #include "sdi.h"
 
@@ -26,4 +27,37 @@ void sdi_calc_parity_checksum(uint16_t *buf, uint16_t dc)
     checksum |= (!(checksum >> 8)) << 9;
 
     buf[ANC_START_LEN+dc] = checksum;
+}
+
+void sdi_clear_vbi(uint8_t *dst, int w)
+{
+	memset(&dst[0], 0x10, w);
+	memset(&dst[w], 0x80, w);
+}
+
+void sdi_clear_vanc(uint16_t *dst)
+{
+    for (int i = 0; i < VANC_WIDTH; i++)
+        dst[i] = 0x40;
+
+    dst += VANC_WIDTH;
+
+    for (int i = 0; i < VANC_WIDTH; i++)
+        dst[i] = 0x200;
+}
+
+uint16_t *sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid)
+{
+    /* ADF */
+    dst[0] = 0x000;
+    dst[1] = 0x3ff;
+    dst[2] = 0x3ff;
+    /* DID */
+    dst[3] = did;
+    /* SDID */
+    dst[4] = sdid;
+    /* DC */
+    dst[5] = 0;
+
+    return &dst[5];
 }
