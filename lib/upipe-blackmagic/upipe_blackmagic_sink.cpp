@@ -542,12 +542,13 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         if (packets[i] == 0)
             continue;
 
+        uint16_t *buf = upipe_bmd_sink->vanc_tmp[i];
+
         void *vanc;
         ancillary->GetBufferForVerticalBlankingLine(OP47_LINE1 + 563*i, &vanc);
-        sdi_clear_vanc(upipe_bmd_sink->vanc_tmp[i]);
+        sdi_clear_vanc(buf);
 
         uint16_t *ctr = &upipe_bmd_sink->op47_sequence_counter[i];
-        uint16_t *buf = upipe_bmd_sink->vanc_tmp[i];
 
         int idx = OP47_STRUCT_B_OFFSET + 45 * packets[i];
 
@@ -570,9 +571,8 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
 
         buf[DC_POS] = idx - ANC_START_LEN;
 
-        sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[i]);
-        sdi_encode_v210((uint32_t*)vanc,
-                upipe_bmd_sink->vanc_tmp[i],
+        sdi_calc_parity_checksum(buf);
+        sdi_encode_v210((uint32_t*)vanc, buf,
                 upipe_bmd_sink->displayMode->GetWidth());
     }
 }
@@ -1058,25 +1058,24 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
     int ntsc = upipe_bmd_sink->mode == bmdModeNTSC ||
                upipe_bmd_sink->mode == bmdModeHD1080i5994;
 
-    if( ntsc && pic_data_size > 0 ) {
+    if (ntsc && pic_data_size > 0) {
         /** XXX: Support crazy 25fps captions? **/
         const uint8_t fps = upipe_bmd_sink->mode == bmdModeNTSC ||
             upipe_bmd_sink->mode == bmdModeHD1080i5994 ? 0x4 : 0x7;
         void *vanc;
         ancillary->GetBufferForVerticalBlankingLine(CC_LINE, &vanc);
-        sdi_clear_vanc(upipe_bmd_sink->vanc_tmp[0]);
-        sdi_start_anc(upipe_bmd_sink->vanc_tmp[0], 0x61, 0x1);
+        uint16_t *buf = upipe_bmd_sink->vanc_tmp[0];
+        sdi_clear_vanc(buf);
+        sdi_start_anc(buf, 0x61, 0x1);
         sdi_write_cdp(pic_data, pic_data_size,
-                &upipe_bmd_sink->vanc_tmp[0][ANC_START_LEN],
+                &buf[ANC_START_LEN],
                 &upipe_bmd_sink->cdp_hdr_sequence_cntr, fps);
-        sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[0]);
+        sdi_calc_parity_checksum(buf);
 
         if (sd)
-            sdi_encode_v210_sd((uint32_t*)vanc,
-                    (uint8_t*)upipe_bmd_sink->vanc_tmp[0], w);
+            sdi_encode_v210_sd((uint32_t*)vanc, (uint8_t*)buf, w);
         else
-            sdi_encode_v210((uint32_t*)vanc,
-                    upipe_bmd_sink->vanc_tmp[0], w);
+            sdi_encode_v210((uint32_t*)vanc, buf, w);
     }
 
     /* Loop through subpic data */
