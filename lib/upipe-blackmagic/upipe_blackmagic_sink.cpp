@@ -68,7 +68,6 @@
 #include <errno.h>
 #include <assert.h>
 
-#include <libavutil/intreadwrite.h>
 #include <libzvbi.h>
 
 #include <pthread.h>
@@ -82,25 +81,6 @@
 #define PREROLL_FRAMES 3
 
 #define DECKLINK_CHANNELS 16
-
-/* don't clip the v210 anc data */
-#define WRITE_PIXELS(a, b, c)           \
-    do {                                \
-        val =  (*a);                    \
-        val |= (*b << 10)  |            \
-               (*c << 20);              \
-        AV_WL32(dst, val);              \
-        dst++;                          \
-    } while (0)
-
-#define WRITE_PIXELS8(a, b, c)           \
-    do {                                \
-        val =  (*a << 2);               \
-        val |= (*b << 12)  |            \
-               (*c << 22);              \
-        AV_WL32(dst, val);              \
-        dst++;                          \
-    } while (0)
 
 const static uint8_t reverse_tab[256] = {
     0x00,0x80,0x40,0xC0,0x20,0xA0,0x60,0xE0,0x10,0x90,0x50,0xD0,0x30,0xB0,0x70,0xF0,
@@ -449,54 +429,6 @@ private:
     struct upipe_bmd_sink *upipe_bmd_sink;
 };
 
-static void upipe_bmd_sink_encode_v210(struct upipe *upipe, uint32_t *dst, int field, int vbi)
-{
-    struct upipe_bmd_sink *upipe_bmd_sink =
-        upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-    int width = upipe_bmd_sink->displayMode->GetWidth();
-    int w;
-    uint32_t val = 0;
-
-    if (vbi) {
-        uint8_t *y = (uint8_t*)upipe_bmd_sink->vanc_tmp;
-        uint8_t *u = &y[720];
-
-        for( w = 0; w < 720; w += 6 ){
-            WRITE_PIXELS8(u, y, (u+1));
-            y += 1;
-            u += 2;
-            WRITE_PIXELS8(y, u, (y+1));
-            y += 2;
-            u += 1;
-            WRITE_PIXELS8(u, y, (u+1));
-            y += 1;
-            u += 2;
-            WRITE_PIXELS8(y, u, (y+1));
-            y += 2;
-            u += 1;
-        }
-    } else {
-        /* 1280 isn't mod-6 so long vanc packets will be truncated */
-        uint16_t *y = &upipe_bmd_sink->vanc_tmp[field][0];
-        uint16_t *u = &upipe_bmd_sink->vanc_tmp[field][width];
-
-        for( w = 0; w < width; w += 6 ){
-            WRITE_PIXELS(u, y, (u+1));
-            y += 1;
-            u += 2;
-            WRITE_PIXELS(y, u, (y+1));
-            y += 2;
-            u += 1;
-            WRITE_PIXELS(u, y, (u+1));
-            y += 1;
-            u += 2;
-            WRITE_PIXELS(y, u, (y+1));
-            y += 2;
-            u += 1;
-        }
-    }
-}
-
 static void upipe_bmd_sink_write_op47_header(struct upipe *upipe, int field)
 {
     struct upipe_bmd_sink *upipe_bmd_sink =
@@ -630,7 +562,9 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
                                                           upipe_bmd_sink->sliced, 1);
 
                         ancillary->GetBufferForVerticalBlankingLine(line, &vanc[0]);
-                        upipe_bmd_sink_encode_v210(upipe, (uint32_t*)vanc[0], 0, 1);
+                        sdi_encode_v210((uint32_t*)vanc[0],
+                                &upipe_bmd_sink->vanc_tmp[0][0], 1,
+                                upipe_bmd_sink->displayMode->GetWidth());
                     } else {
                         if (!upipe_bmd_sink->op47_number_of_packets[f2])
                             upipe_bmd_sink_write_op47_header(upipe, f2);
@@ -652,7 +586,9 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
 
                 sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[i],
                         upipe_bmd_sink->dc[i][0]);
-                upipe_bmd_sink_encode_v210(upipe, (uint32_t*)vanc[i], i, 0);
+                sdi_encode_v210((uint32_t*)vanc[i],
+                        &upipe_bmd_sink->vanc_tmp[i][0], 0,
+                        upipe_bmd_sink->displayMode->GetWidth());
             }
         }
     }
@@ -1154,7 +1090,9 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
         sdi_calc_parity_checksum(upipe_bmd_sink->vanc_tmp[0],
                 upipe_bmd_sink->dc[0][0]);
 
-        upipe_bmd_sink_encode_v210(upipe, (uint32_t*)vanc, 0, sd);
+        sdi_encode_v210((uint32_t*)vanc,
+                &upipe_bmd_sink->vanc_tmp[0][0], sd,
+                upipe_bmd_sink->displayMode->GetWidth());
     }
 
     /* Loop through subpic data */
