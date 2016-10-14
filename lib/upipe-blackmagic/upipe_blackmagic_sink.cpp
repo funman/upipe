@@ -550,68 +550,6 @@ static int upipe_bmd_sink_sub_read_uref_attributes(struct uref *uref,
     return UBASE_ERR_NONE;
 }
 
-static void start_code(const int32_t *buf, uint8_t channel_idx, unsigned samples)
-{
-    bool sync = false;
-    bool zero = true;
-
-    for (size_t i = 0; i < 1920; i++) {
-        if (buf[DECKLINK_CHANNELS*i + channel_idx] != 0 ||
-                buf[DECKLINK_CHANNELS*i + channel_idx+1] != 0)
-            zero = false;
-
-        if (!sync && buf[DECKLINK_CHANNELS*i + channel_idx +1] == 0x6f872000) {
-            printf("[%d] MISSED SYNC on 2nd sample (off %zu/1920)\n", channel_idx/2, i);
-        }
-
-        if (buf[DECKLINK_CHANNELS*i + channel_idx] != 0x6f872000)
-            continue;
-
-        if (i+4 > 1920) {
-            printf("start code too late (at sample %zu)\n", i);
-            return;
-        }
-
-        if (buf[DECKLINK_CHANNELS*i+channel_idx+1] != 0x54e1f000) {
-            printf("found Pa but not Pb\n");
-            continue;
-        }
-
-        if (buf[DECKLINK_CHANNELS*(i+1)+channel_idx] != 0x003c0000) {
-            printf("Unexpected Pc 0x%x\n", buf[DECKLINK_CHANNELS*(i+1)+channel_idx]);
-            continue;
-        }
-
-        if (buf[DECKLINK_CHANNELS*(i+1)+channel_idx+1] != 0x11d00000) {
-            printf("Unexpected Pd 0x%x\n", buf[DECKLINK_CHANNELS*(i+1)+channel_idx+1]);
-            continue;
-        }
-
-        if (buf[DECKLINK_CHANNELS*(i+2)+channel_idx] != 0x0788e000) {
-            printf("Unexpected Dolby-E start code 0x%x\n", buf[DECKLINK_CHANNELS*(i+2)+channel_idx]);
-            continue;
-        }
-
-        const unsigned frame_size_samples = 9120 /* bytes */ / 5 /* bytes per samples pair */;
-
-#if 0 /* tag samples around sync words to find them easily in VANC dump */
-        for( int j = 0; j < 1920; j++ ) {
-            uint32_t *b = (uint32_t*)buf;
-            if (j >= i && j < i+8)
-                continue;
-            b[j*DECKLINK_CHANNELS+0] = (2*j) << 12;
-            b[j*DECKLINK_CHANNELS+1] = (2*j+1) << 12;
-        }
-#endif
-        printf("[%d] S337 sync at sample %zu/1920 : burst %zu -> %zu\n", channel_idx / 2,
-                i, i + 4, i + 4 + frame_size_samples);
-        sync = true;
-    }
-
-    if (!sync && !zero)
-        printf("[%d] NO SYNC and frame not all zeros\n", channel_idx/2);
-}
-
 static void copy_samples(upipe_bmd_sink_sub *upipe_bmd_sink_sub,
         struct uref *uref, uint64_t offset, uint64_t samples)
 {
@@ -792,10 +730,6 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
 
         /* read the samples into our final buffer */
         copy_samples(upipe_bmd_sink_sub, uref, samples_offset, missing_samples);
-
-        if (0 && upipe_bmd_sink_sub->dolby_e)
-            start_code(upipe_bmd_sink->audio_buf, upipe_bmd_sink_sub->channel_idx,
-                    samples);
 
         /* The latest in the outgoing block we've written to */
         if (end_offset < samples_offset + missing_samples)
