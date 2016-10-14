@@ -93,7 +93,7 @@ void sdi_write_cdp(const uint8_t *src, size_t src_size,
 
     dst[ANC_START_LEN + 9 + src_size + 3] = checksum ? 256 - checksum : 0;
 
-    dst[5] = cnt; // DC
+    dst[DC_POS] = cnt; // DC
 }
 
 static inline uint32_t to_le32(uint32_t a)
