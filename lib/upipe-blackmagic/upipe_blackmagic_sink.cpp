@@ -1911,6 +1911,8 @@ static int upipe_bmd_sink_open_card(struct upipe *upipe)
         modelName = NULL;
     } else if (!strcmp(modelName, "DeckLink SDI")) {
         upipe_bmd_sink->line21_offset = 54;
+    } else if (!strcmp(modelName, "DeckLink Duo 2")) {
+        upipe_bmd_sink->line21_offset = 33;
     } else if (!strcmp(modelName, "DeckLink SDI 4K")) {
         upipe_bmd_sink->line21_offset = 33;
     } else {
