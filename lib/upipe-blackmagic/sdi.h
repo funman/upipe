@@ -1,5 +1,7 @@
 #include <inttypes.h>
 
+#include <libzvbi.h>
+
 #define CC_LINE 9
 #define AFD_LINE 11
 #define OP47_LINE1 12
@@ -28,3 +30,6 @@ void sdi_write_cdp(const uint8_t *src, size_t src_size,
 
 void sdi_encode_v210_sd(uint32_t *dst, uint8_t *src, int width);
 void sdi_encode_v210(uint32_t *dst, uint16_t *src, int width);
+
+int sdi_encode_ttx_sd(uint8_t *buf, const uint8_t *pic_data, vbi_sampling_par *sp);
+void sdi_encode_ttx(uint16_t *buf, int f2, int packets, const uint8_t **packet, uint16_t *ctr);
