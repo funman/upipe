@@ -283,6 +283,7 @@ struct upipe_bmd_sink {
     uint16_t cdp_hdr_sequence_cntr;
 
     /** OP47 teletext sequence counter **/
+    // XXX: should counter be per-field?
     uint16_t op47_sequence_counter[2];
 
     /** vbi **/
@@ -424,11 +425,10 @@ private:
 };
 
 /* VBI Teletext */
-static void upipe_bmd_sink_extract_ttx_sd(struct upipe *upipe, IDeckLinkVideoFrameAncillary *ancillary,
-                                       const uint8_t *pic_data, size_t pic_data_size, int w)
+static void upipe_bmd_sink_extract_ttx_sd(IDeckLinkVideoFrameAncillary *ancillary,
+                                       const uint8_t *pic_data, size_t pic_data_size, int w,
+                                       vbi_sampling_par *sp)
 {
-    struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-
     for (; pic_data_size >= 46; pic_data += 46, pic_data_size -= 46) {
         uint8_t data_unit_id  = pic_data[0];
         uint8_t data_unit_len = pic_data[1];
@@ -450,9 +450,9 @@ static void upipe_bmd_sink_extract_ttx_sd(struct upipe *upipe, IDeckLinkVideoFra
         uint8_t buf[VANC_WIDTH*2*2];
         sdi_clear_vbi(buf, 720);
 
-        upipe_bmd_sink->sp.start[f2] = line;
-        upipe_bmd_sink->sp.count[f2] = 1;
-        upipe_bmd_sink->sp.count[!f2] = 0;
+        sp->start[f2] = line;
+        sp->count[f2] = 1;
+        sp->count[!f2] = 0;
 
         vbi_sliced sliced;
         sliced.id = VBI_SLICED_TELETEXT_B;
@@ -460,7 +460,7 @@ static void upipe_bmd_sink_extract_ttx_sd(struct upipe *upipe, IDeckLinkVideoFra
         for (int i = 0; i < 42; i++)
             sliced.data[i] = REVERSE(pic_data[4+i]);
 
-        if (!vbi_raw_video_image(buf, 720, &upipe_bmd_sink->sp,
+        if (!vbi_raw_video_image(buf, 720, sp,
                 0, 0, 0, 0x000000FF, false,
                 &sliced, 1)) {
             // error
@@ -473,11 +473,9 @@ static void upipe_bmd_sink_extract_ttx_sd(struct upipe *upipe, IDeckLinkVideoFra
     }
 }
 
-static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameAncillary *ancillary,
-                                       const uint8_t *pic_data, size_t pic_data_size, int w)
+static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
+        const uint8_t *pic_data, size_t pic_data_size, int w, uint16_t *ctr_array)
 {
-    struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_sub_mgr(upipe->mgr);
-
     int packets[2] = {0, 0};
     uint16_t vanc_tmp[2][VANC_WIDTH*2];
 
@@ -547,8 +545,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         ancillary->GetBufferForVerticalBlankingLine(OP47_LINE1 + 563*i, &vanc);
         sdi_clear_vanc(buf);
 
-        // XXX: should counter be per-field?
-        uint16_t *ctr = &upipe_bmd_sink->op47_sequence_counter[i];
+        uint16_t *ctr = &ctr_array[i];
 
         int idx = OP47_STRUCT_B_OFFSET + 45 * packets[i];
 
@@ -1122,9 +1119,10 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
             size--;
 
             if (sd)
-                upipe_bmd_sink_extract_ttx_sd(&subpic_sub->upipe, ancillary, buf, size, w);
+                upipe_bmd_sink_extract_ttx_sd(ancillary, buf, size, w, &upipe_bmd_sink->sp);
             else
-                upipe_bmd_sink_extract_ttx(&subpic_sub->upipe, ancillary, buf, size, w);
+                upipe_bmd_sink_extract_ttx(ancillary, buf, size, w,
+                        &upipe_bmd_sink->op47_sequence_counter[0]);
             uref_block_unmap(subpic, 0);
         }
         uref_free(subpic);
