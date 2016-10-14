@@ -424,6 +424,32 @@ private:
     struct upipe_bmd_sink *upipe_bmd_sink;
 };
 
+static void sdi_encode_ttx_sd(uint8_t *buf, int line, int f2,
+        const uint8_t *src, vbi_sampling_par *sp)
+{
+    sdi_clear_vbi(buf, 720);
+
+    sp->start[f2] = line;
+    sp->count[f2] = 1;
+    sp->count[!f2] = 0;
+
+    vbi_sliced sliced;
+    sliced.id = VBI_SLICED_TELETEXT_B;
+    sliced.line = line;
+    for (int i = 0; i < 42; i++)
+        sliced.data[i] = REVERSE(src[i]);
+
+    if (!vbi_raw_video_image(buf, 720, sp, 0, 0, 0, 0x000000FF, false,
+                &sliced, 1)) {
+        // error
+    }
+}
+
+static void sdi_encode_ttx(uint8_t *buf, int line, int f2,
+        const uint8_t *src, uint16_t *ctr_array)
+{
+}
+
 /* VBI Teletext */
 static void upipe_bmd_sink_extract_ttx_sd(IDeckLinkVideoFrameAncillary *ancillary,
                                        const uint8_t *pic_data, size_t pic_data_size, int w,
@@ -447,37 +473,51 @@ static void upipe_bmd_sink_extract_ttx_sd(IDeckLinkVideoFrameAncillary *ancillar
         if (line == 0)
             continue;
 
-        uint8_t buf[VANC_WIDTH*2*2];
-        sdi_clear_vbi(buf, 720);
+        if (/*sd*/1) {
+            uint8_t buf[VANC_WIDTH*2*2];
+            sdi_encode_ttx_sd(&buf[0], line, f2, &pic_data[4], sp);
 
-        sp->start[f2] = line;
-        sp->count[f2] = 1;
-        sp->count[!f2] = 0;
-
-        vbi_sliced sliced;
-        sliced.id = VBI_SLICED_TELETEXT_B;
-        sliced.line = line;
-        for (int i = 0; i < 42; i++)
-            sliced.data[i] = REVERSE(pic_data[4+i]);
-
-        if (!vbi_raw_video_image(buf, 720, sp,
-                0, 0, 0, 0x000000FF, false,
-                &sliced, 1)) {
-            // error
+            void *vanc;
+            ancillary->GetBufferForVerticalBlankingLine(line, &vanc);
+            sdi_encode_v210_sd((uint32_t*)vanc, buf, w);
+            break; /* 1 packet only */
+        } else {
+            //
         }
-
-        void *vanc;
-        ancillary->GetBufferForVerticalBlankingLine(line, &vanc);
-        sdi_encode_v210_sd((uint32_t*)vanc, buf, w);
-        break; /* 1 packet only */
     }
+}
+
+static int op47_packets(const uint16_t *buf)
+{
+    for (int i = 0; i < 5; i++)
+        if (buf[i])
+            return i + 1;
+
+    return 0;
 }
 
 static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
         const uint8_t *pic_data, size_t pic_data_size, int w, uint16_t *ctr_array)
 {
-    int packets[2] = {0, 0};
     uint16_t vanc_tmp[2][VANC_WIDTH*2];
+
+    for (int i = 0; i < 2; i++) {
+        uint16_t *buf = vanc_tmp[i];
+        sdi_start_anc(buf, 0x43, 0x2);
+
+        /* 2 identifiers */
+        buf[ANC_START_LEN]   = 0x51;
+        buf[ANC_START_LEN+1] = 0x15;
+
+        /* Length, populate this last */
+        buf[ANC_START_LEN+2] = 0x0;
+
+        /* Format code */
+        buf[ANC_START_LEN+3] = 0x2; /* WST Teletext subtitles */
+
+        /* Data Adaption header, 5 packets max */
+        memset(&buf[ANC_START_LEN + OP47_INITIAL_WORDS], 0x00, 5);
+    }
 
     for (; pic_data_size >= 46; pic_data += 46, pic_data_size -= 46) {
         uint8_t data_unit_id  = pic_data[0];
@@ -500,30 +540,15 @@ static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
 
         uint16_t *buf = vanc_tmp[f2];
 
-        if (packets[f2] == 0) {
-            sdi_start_anc(buf, 0x43, 0x2);
-
-            /* 2 identifiers */
-            buf[ANC_START_LEN]   = 0x51;
-            buf[ANC_START_LEN+1] = 0x15;
-
-            /* Length, populate this last */
-            buf[ANC_START_LEN+2] = 0x0;
-
-            /* Format code */
-            buf[ANC_START_LEN+3] = 0x2; /* WST Teletext subtitles */
-
-            /* Data Adaption header, 5 packets max */
-            memset(&buf[ANC_START_LEN + OP47_INITIAL_WORDS], 0x00, 5);
-        } else if (packets[f2] >= 5) {
+        int packets = op47_packets(&buf[ANC_START_LEN + OP47_INITIAL_WORDS]);
+        if (packets >= 5)
             break;
-        }
 
         /* Write structure A */
-        buf[ANC_START_LEN + OP47_INITIAL_WORDS + packets[f2]]  = ((!f2) << 7) | line_offset;
+        buf[ANC_START_LEN + OP47_INITIAL_WORDS + packets]  = ((!f2) << 7) | line_offset;
 
         /* Structure B */
-        int idx = OP47_STRUCT_B_OFFSET + 45 * packets[f2];
+        int idx = OP47_STRUCT_B_OFFSET + 45 * packets;
 
         /* 2x Run in codes */
         memset(&buf[idx], 0x55, 2);
@@ -531,19 +556,18 @@ static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
         /* Framing code, MRAG and the data */
         for (int i = 0; i < 43; i++)
             buf[idx + 2 + i] = REVERSE(pic_data[3 + i]);
-
-        packets[f2]++;
     }
 
     for (int i = 0; i < 2; i++) {
-        if (packets[i] == 0)
-            continue;
-
         uint16_t *buf = vanc_tmp[i];
+        int packets = op47_packets(&buf[ANC_START_LEN + OP47_INITIAL_WORDS]);
+
+        if (packets == 0)
+            continue;
 
         uint16_t *ctr = &ctr_array[i];
 
-        int idx = OP47_STRUCT_B_OFFSET + 45 * packets[i];
+        int idx = OP47_STRUCT_B_OFFSET + 45 * packets;
 
         /* Footer ID */
         buf[idx++] = 0x74;
