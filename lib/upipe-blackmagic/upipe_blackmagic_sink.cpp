@@ -278,7 +278,6 @@ struct upipe_bmd_sink {
     uint64_t pts;
 
     /** vanc/vbi temporary buffer **/
-    uint16_t vanc_tmp[2][VANC_WIDTH*2];
 
     /** closed captioning **/
     uint16_t cdp_hdr_sequence_cntr;
@@ -448,7 +447,7 @@ static void upipe_bmd_sink_extract_ttx_sd(struct upipe *upipe, IDeckLinkVideoFra
         if (line == 0)
             continue;
 
-        uint8_t *buf = (uint8_t*)upipe_bmd_sink->vanc_tmp[0];
+        uint8_t buf[VANC_WIDTH*2*2];
         sdi_clear_vbi(buf, 720);
 
         upipe_bmd_sink->sp.start[f2] = line;
@@ -480,6 +479,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
     struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_sub_mgr(upipe->mgr);
 
     int packets[2] = {0, 0};
+    uint16_t vanc_tmp[2][VANC_WIDTH*2];
 
     for (; pic_data_size >= 46; pic_data += 46, pic_data_size -= 46) {
         uint8_t data_unit_id  = pic_data[0];
@@ -500,7 +500,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         if (line == 0)
             return;
 
-        uint16_t *buf = upipe_bmd_sink->vanc_tmp[f2];
+        uint16_t *buf = vanc_tmp[f2];
 
         if (packets[f2] == 0) {
             sdi_start_anc(buf, 0x43, 0x2);
@@ -541,7 +541,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         if (packets[i] == 0)
             continue;
 
-        uint16_t *buf = upipe_bmd_sink->vanc_tmp[i];
+        uint16_t *buf = vanc_tmp[i];
 
         void *vanc;
         ancillary->GetBufferForVerticalBlankingLine(OP47_LINE1 + 563*i, &vanc);
@@ -1063,7 +1063,7 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
             upipe_bmd_sink->mode == bmdModeHD1080i5994 ? 0x4 : 0x7;
         void *vanc;
         ancillary->GetBufferForVerticalBlankingLine(CC_LINE, &vanc);
-        uint16_t *buf = upipe_bmd_sink->vanc_tmp[0];
+        uint16_t buf[VANC_WIDTH*2];
         sdi_clear_vanc(buf);
         sdi_start_anc(buf, 0x61, 0x1);
         sdi_write_cdp(pic_data, pic_data_size,
