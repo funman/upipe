@@ -1,6 +1,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include <bitstream/smpte/291.h>
+
 #include "sdi.h"
 
 static const uint8_t reverse_tab[256] = {
@@ -70,13 +72,10 @@ void sdi_clear_vanc(uint16_t *dst)
 
 static void sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid)
 {
-    /* ADF */
-    dst[0] = 0x000;
-    dst[1] = 0x3ff;
-    dst[2] = 0x3ff;
-    /* DID */
+    dst[0] = S291_ADF1;
+    dst[1] = S291_ADF2;
+    dst[2] = S291_ADF3;
     dst[3] = did;
-    /* SDID */
     dst[4] = sdid;
     /* DC */
     dst[5] = 0;
@@ -86,7 +85,7 @@ void sdi_write_cdp(const uint8_t *src, size_t src_size,
         uint16_t *dst, uint16_t *ctr, uint8_t fps)
 {
     sdi_clear_vanc(dst);
-    sdi_start_anc(dst, 0x61, 0x1);
+    sdi_start_anc(dst, S291_CEA708_DID, S291_CEA708_SDID);
 
     const uint8_t cnt = 9 + src_size + 4;
     const uint16_t hdr_sequence_cntr = (*ctr)++;
@@ -203,7 +202,7 @@ int sdi_encode_ttx_sd(uint8_t *buf, const uint8_t *pic_data, vbi_sampling_par *s
 
 void sdi_encode_ttx(uint16_t *buf, int f2, int packets, const uint8_t **packet, uint16_t *ctr)
 {
-    sdi_start_anc(buf, 0x43, 0x2);
+    sdi_start_anc(buf, S291_OP47SDP_DID, S291_OP47SDP_SDID);
 
     /* 2 identifiers */
     buf[ANC_START_LEN]   = 0x51;
