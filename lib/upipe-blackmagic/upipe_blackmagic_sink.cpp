@@ -426,7 +426,7 @@ private:
 
 /* VBI Teletext */
 static void upipe_bmd_sink_extract_ttx_sd(struct upipe *upipe, IDeckLinkVideoFrameAncillary *ancillary,
-                                       const uint8_t *pic_data, size_t pic_data_size)
+                                       const uint8_t *pic_data, size_t pic_data_size, int w)
 {
     struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_sub_mgr(upipe->mgr);
 
@@ -469,14 +469,13 @@ static void upipe_bmd_sink_extract_ttx_sd(struct upipe *upipe, IDeckLinkVideoFra
 
         void *vanc;
         ancillary->GetBufferForVerticalBlankingLine(line, &vanc);
-        sdi_encode_v210_sd((uint32_t*)vanc, buf,
-            upipe_bmd_sink->displayMode->GetWidth());
+        sdi_encode_v210_sd((uint32_t*)vanc, buf, w);
         break; /* 1 packet only */
     }
 }
 
 static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameAncillary *ancillary,
-                                       const uint8_t *pic_data, size_t pic_data_size)
+                                       const uint8_t *pic_data, size_t pic_data_size, int w)
 {
     struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_sub_mgr(upipe->mgr);
 
@@ -573,8 +572,7 @@ static void upipe_bmd_sink_extract_ttx(struct upipe *upipe, IDeckLinkVideoFrameA
         buf[DC_POS] = idx - ANC_START_LEN;
 
         sdi_calc_parity_checksum(buf);
-        sdi_encode_v210((uint32_t*)vanc, buf,
-                upipe_bmd_sink->displayMode->GetWidth());
+        sdi_encode_v210((uint32_t*)vanc, buf, w);
     }
 }
 
@@ -1124,9 +1122,9 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
             size--;
 
             if (sd)
-                upipe_bmd_sink_extract_ttx_sd(&subpic_sub->upipe, ancillary, buf, size);
+                upipe_bmd_sink_extract_ttx_sd(&subpic_sub->upipe, ancillary, buf, size, w);
             else
-                upipe_bmd_sink_extract_ttx(&subpic_sub->upipe, ancillary, buf, size);
+                upipe_bmd_sink_extract_ttx(&subpic_sub->upipe, ancillary, buf, size, w);
             uref_block_unmap(subpic, 0);
         }
         uref_free(subpic);
