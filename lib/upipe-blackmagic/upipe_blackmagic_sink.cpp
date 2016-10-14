@@ -424,10 +424,13 @@ private:
     struct upipe_bmd_sink *upipe_bmd_sink;
 };
 
-static void sdi_encode_ttx_sd(uint8_t *buf, int line, int f2,
-        const uint8_t *src, vbi_sampling_par *sp)
+static int sdi_encode_ttx_sd(uint8_t *buf, const uint8_t *pic_data, vbi_sampling_par *sp)
 {
-    sdi_clear_vbi(buf, 720);
+    uint8_t line_offset = pic_data[2] & 0x1f;
+    // XXX: verify. 1 means first field
+    // according to EN 300 472
+    uint8_t f2 = (pic_data[2] >> 5) & 1;
+    uint16_t line = line_offset + PAL_FIELD_OFFSET * f2;
 
     sp->start[f2] = line;
     sp->count[f2] = 1;
@@ -437,12 +440,13 @@ static void sdi_encode_ttx_sd(uint8_t *buf, int line, int f2,
     sliced.id = VBI_SLICED_TELETEXT_B;
     sliced.line = line;
     for (int i = 0; i < 42; i++)
-        sliced.data[i] = REVERSE(src[i]);
+        sliced.data[i] = REVERSE(pic_data[4+i]);
 
     if (!vbi_raw_video_image(buf, 720, sp, 0, 0, 0, 0x000000FF, false,
                 &sliced, 1)) {
         // error
     }
+    return line;
 }
 
 static void sdi_encode_ttx(uint16_t *buf, int f2, int packets, const uint8_t **packet, uint16_t *ctr)
@@ -530,39 +534,40 @@ static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
         // XXX: verify. 1 means first field
         // according to EN 300 472
         uint8_t f2 = (pic_data[2] >> 5) & 1;
-        uint16_t line = line_offset + PAL_FIELD_OFFSET * f2;
-        if (line == 0)
+        if (f2 == 0 && line_offset == 0) // line == 0
             continue;
 
-        if (/*sd*/1) {
+        if (packets[f2] < 5)
+            packet[f2][packets[f2]++] = pic_data;
+
+        if (sd)
+            break; /* 1 packet only */
+    }
+
+    for (int i = 0; i < 2; i++) {
+        if (packets[i] == 0)
+            continue;
+
+        if (sd) {
             uint8_t buf[VANC_WIDTH*2*2];
-            sdi_encode_ttx_sd(&buf[0], line, f2, &pic_data[4], sp);
+            sdi_clear_vbi(buf, 720);
+
+            int line = sdi_encode_ttx_sd(&buf[0], packet[i][0], sp);
 
             void *vanc;
             ancillary->GetBufferForVerticalBlankingLine(line, &vanc);
             sdi_encode_v210_sd((uint32_t*)vanc, buf, w);
-            break; /* 1 packet only */
         } else {
-            if (packets[f2] < 5)
-                packet[f2][packets[f2]++] = pic_data;
+            uint16_t buf[VANC_WIDTH*2];
+
+            sdi_clear_vanc(buf);
+            sdi_encode_ttx(&buf[0], i, packets[i], &packet[i][0], &ctr_array[i]);
+
+            void *vanc;
+            int line = OP47_LINE1 + 563*i;
+            ancillary->GetBufferForVerticalBlankingLine(line, &vanc);
+            sdi_encode_v210((uint32_t*)vanc, buf, w);
         }
-    }
-
-    if (sd)
-        return;
-
-    for (int i = 0; i < 2; i++) {
-        uint16_t buf[VANC_WIDTH*2];
-        if (packets[i] == 0)
-            continue;
-
-        sdi_clear_vanc(buf);
-        sdi_encode_ttx(&buf[0], i, packets[i], &packet[i][0], &ctr_array[i]);
-
-        void *vanc;
-        int line = OP47_LINE1 + 563*i;
-        ancillary->GetBufferForVerticalBlankingLine(line, &vanc);
-        sdi_encode_v210((uint32_t*)vanc, buf, w);
     }
 }
 
