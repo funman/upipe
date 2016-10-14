@@ -64,33 +64,36 @@ void sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid)
 void sdi_write_cdp(const uint8_t *src, size_t src_size,
         uint16_t *dst, uint16_t *ctr, uint8_t fps)
 {
+    sdi_clear_vanc(dst);
+    sdi_start_anc(dst, 0x61, 0x1);
+
     const uint8_t cnt = 9 + src_size + 4;
     const uint16_t hdr_sequence_cntr = (*ctr)++;
 
-    dst[0] = 0x96;
-    dst[1] = 0x69;
-    dst[2] = cnt;
-    dst[3] = (fps << 4) | 0xf; // cdp_frame_rate | Reserved
-    dst[4] = (1 << 6) | (1 << 1) | 1; // ccdata_present | caption_service_active | Reserved
-    dst[5] = hdr_sequence_cntr >> 8;
-    dst[6] = hdr_sequence_cntr & 0xff;
-    dst[7] = 0x72;
-    dst[8] = (0x7 << 5) | (src_size / 3);
+    dst[ANC_START_LEN + 0] = 0x96;
+    dst[ANC_START_LEN + 1] = 0x69;
+    dst[ANC_START_LEN + 2] = cnt;
+    dst[ANC_START_LEN + 3] = (fps << 4) | 0xf; // cdp_frame_rate | Reserved
+    dst[ANC_START_LEN + 4] = (1 << 6) | (1 << 1) | 1; // ccdata_present | caption_service_active | Reserved
+    dst[ANC_START_LEN + 5] = hdr_sequence_cntr >> 8;
+    dst[ANC_START_LEN + 6] = hdr_sequence_cntr & 0xff;
+    dst[ANC_START_LEN + 7] = 0x72;
+    dst[ANC_START_LEN + 8] = (0x7 << 5) | (src_size / 3);
 
     for (int i = 0; i < src_size; i++)
-        dst[9 + i] = src[i];
+        dst[ANC_START_LEN + 9 + i] = src[i];
 
-    dst[9 + src_size] = 0x74;
-    dst[9 + src_size + 1] = dst[5];
-    dst[9 + src_size + 2] = dst[6];
+    dst[ANC_START_LEN + 9 + src_size] = 0x74;
+    dst[ANC_START_LEN + 9 + src_size + 1] = dst[ANC_START_LEN + 5];
+    dst[ANC_START_LEN + 9 + src_size + 2] = dst[ANC_START_LEN + 6];
 
     uint8_t checksum = 0;
     for (int i = 0; i < cnt-1; i++) // don't include checksum
-        checksum += dst[i];
+        checksum += dst[ANC_START_LEN + i];
 
-    dst[9 + src_size + 3] = checksum ? 256 - checksum : 0;
+    dst[ANC_START_LEN + 9 + src_size + 3] = checksum ? 256 - checksum : 0;
 
-    dst[-1] = cnt; // DC
+    dst[5] = cnt; // DC
 }
 
 static inline uint32_t to_le32(uint32_t a)

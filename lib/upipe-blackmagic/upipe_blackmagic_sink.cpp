@@ -1086,10 +1086,7 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
         void *vanc;
         ancillary->GetBufferForVerticalBlankingLine(CC_LINE, &vanc);
         uint16_t buf[VANC_WIDTH*2];
-        sdi_clear_vanc(buf);
-        sdi_start_anc(buf, 0x61, 0x1);
-        sdi_write_cdp(pic_data, pic_data_size,
-                &buf[ANC_START_LEN],
+        sdi_write_cdp(pic_data, pic_data_size, buf,
                 &upipe_bmd_sink->cdp_hdr_sequence_cntr, fps);
         sdi_calc_parity_checksum(buf);
 
