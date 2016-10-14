@@ -65,7 +65,9 @@
 
 #include "include/DeckLinkAPI.h"
 
-#include "sdi.h"
+extern "C" {
+    #include "sdi.h"
+}
 
 #define PREROLL_FRAMES 3
 
