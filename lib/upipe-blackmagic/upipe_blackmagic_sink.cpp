@@ -55,17 +55,6 @@
 #include <upipe-blackmagic/upipe_blackmagic_sink.h>
 
 #include <arpa/inet.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdarg.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <sys/ioctl.h>
-#include <errno.h>
 #include <assert.h>
 
 #include <libzvbi.h>
@@ -1877,7 +1866,6 @@ static int _upipe_bmd_sink_set_genlock_offset(struct upipe *upipe, int64_t offse
 
     return UBASE_ERR_NONE;
 }
-
 
 /** @internal @This processes control commands on an bmd_sink source pipe.
  *
