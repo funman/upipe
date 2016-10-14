@@ -68,7 +68,7 @@ void sdi_clear_vanc(uint16_t *dst)
         dst[i] = 0x200;
 }
 
-void sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid)
+static void sdi_start_anc(uint16_t *dst, uint16_t did, uint16_t sdid)
 {
     /* ADF */
     dst[0] = 0x000;
