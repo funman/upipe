@@ -541,10 +541,6 @@ static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
 
         uint16_t *buf = vanc_tmp[i];
 
-        void *vanc;
-        ancillary->GetBufferForVerticalBlankingLine(OP47_LINE1 + 563*i, &vanc);
-        sdi_clear_vanc(buf);
-
         uint16_t *ctr = &ctr_array[i];
 
         int idx = OP47_STRUCT_B_OFFSET + 45 * packets[i];
@@ -569,6 +565,11 @@ static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
         buf[DC_POS] = idx - ANC_START_LEN;
 
         sdi_calc_parity_checksum(buf);
+
+        void *vanc;
+        ancillary->GetBufferForVerticalBlankingLine(OP47_LINE1 + 563*i, &vanc);
+        sdi_clear_vanc(buf);
+
         sdi_encode_v210((uint32_t*)vanc, buf, w);
     }
 }
