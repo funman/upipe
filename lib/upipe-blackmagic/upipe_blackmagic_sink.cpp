@@ -832,9 +832,8 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
         if (!upipe_bmd_sink->video_frame)
             return NULL;
 
-            /* increase refcount before outputting this frame */
-        ULONG ref = 0;
-        ref = upipe_bmd_sink->video_frame->AddRef();
+        /* increase refcount before outputting this frame */
+        ULONG ref = upipe_bmd_sink->video_frame->AddRef();
         upipe_dbg_va(upipe, "REUSING FRAME %p : %d", upipe_bmd_sink->video_frame, ref);
         return upipe_bmd_sink->video_frame;
     }
