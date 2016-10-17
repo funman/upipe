@@ -682,7 +682,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
             break;
         }
 
-        if (upipe_bmd_sink_sub->dolby_e || upipe_bmd_sink_sub->a52) {
+        if (upipe_bmd_sink_sub->dolby_e) {
             /* do not drop last samples of s337 */
             time_offset = 0;
             pts = video_pts;
