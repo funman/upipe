@@ -1713,18 +1713,12 @@ static int upipe_bmd_sink_open_card(struct upipe *upipe)
     }
 
     const char *modelName;
+    upipe_bmd_sink->line21_offset = 33; /* tested on Duo 2, Quad 2, SDI 4K */
     if (deckLink->GetModelName(&modelName) != S_OK) {
         upipe_err(upipe, "Could not read card model name");
         modelName = NULL;
     } else if (!strcmp(modelName, "DeckLink SDI")) {
         upipe_bmd_sink->line21_offset = 54;
-    } else if (!strcmp(modelName, "DeckLink Duo 2")) {
-        upipe_bmd_sink->line21_offset = 33;
-    } else if (!strcmp(modelName, "DeckLink SDI 4K")) {
-        upipe_bmd_sink->line21_offset = 33;
-    } else {
-        upipe_warn_va(upipe, "Unknown line 21 offset for model %s", modelName);
-        upipe_bmd_sink->line21_offset = 0;
     }
 
     free((void*)modelName);
