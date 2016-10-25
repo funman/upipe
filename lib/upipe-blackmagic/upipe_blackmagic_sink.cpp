@@ -552,7 +552,7 @@ static void copy_samples(upipe_bmd_sink_sub *upipe_bmd_sink_sub,
     if (upipe_bmd_sink_sub->dolby_e) {
         if (upipe_bmd_sink->line21_offset >= samples) {
             upipe_err_va(upipe, "offsetting for line21 would overflow audio: "
-                "offset %"PRIu64" + line 21 %hu, %"PRIu64" samples",
+                "offset %" PRIu64" + line 21 %hu, %" PRIu64" samples",
                 offset, upipe_bmd_sink->line21_offset, samples);
         } else {
             offset  += upipe_bmd_sink->line21_offset;
@@ -635,7 +635,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
 
             /* too late */
             if (unlikely(duration < drop_duration && uref_samples > max_sample_drift)) {
-                upipe_err_va(upipe, "[%d] TOO LATE by %"PRIu64" ticks, dropping %zu samples (%f + %f < %f)",
+                upipe_err_va(upipe, "[%d] TOO LATE by %" PRIu64" ticks, dropping %zu samples (%f + %f < %f)",
                         upipe_bmd_sink_sub->channel_idx/2,
                         video_pts - pts - duration,
                         uref_samples,
@@ -660,7 +660,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
                 if (drop_samples > uref_samples)
                     drop_samples = uref_samples;
 
-                upipe_dbg_va(upipe, "[%d] DROPPING %zu samples for PTS %f / %"PRIu64" ticks (%f)",
+                upipe_dbg_va(upipe, "[%d] DROPPING %zu samples for PTS %f / %" PRIu64" ticks (%f)",
                         upipe_bmd_sink_sub->channel_idx/2,
                         drop_samples, pts_to_time(pts), drop_duration, dur_to_time(drop_duration));
 
@@ -672,12 +672,12 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
             time_offset = 0;
             uref_samples -= drop_samples;
         } else if (unlikely(pts - max_sample_drift * UCLOCK_FREQ / 48000 > last_pts)) { /* too far in the future ? */
-            upipe_err_va(upipe, "[%d] TOO EARLY (%f > %f) by %fs (%"PRIu64" ticks)",
+            upipe_err_va(upipe, "[%d] TOO EARLY (%f > %f) by %fs (%" PRIu64" ticks)",
                 upipe_bmd_sink_sub->channel_idx/2,
                     pts_to_time(pts), pts_to_time(last_pts),
                     dur_to_time(pts - last_pts), pts - last_pts
                     );
-            upipe_dbg_va(upipe, "\t\tStart %"PRId64" End %u", start_offset, end_offset);
+            upipe_dbg_va(upipe, "\t\tStart %" PRId64" End %u", start_offset, end_offset);
             upipe_bmd_sink_sub->uref = uref;
             break;
         }
@@ -696,14 +696,14 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
             if (llabs((int64_t)samples_offset - (int64_t)end_offset <= max_sample_drift))
                 samples_offset = end_offset;
             else
-                upipe_err_va(upipe, "[%d] Mismatching offsets: SAMPLES %"PRIu64" != %u END",
+                upipe_err_va(upipe, "[%d] Mismatching offsets: SAMPLES %" PRIu64" != %u END",
                     upipe_bmd_sink_sub->channel_idx/2,
                     samples_offset, end_offset);
         }
 
         /* we can't write past the end of the buffer */
         if (samples_offset >= samples) {
-            upipe_err_va(upipe, "FIXING offset: %"PRIu64" > %u",
+            upipe_err_va(upipe, "FIXING offset: %" PRIu64" > %u",
                 samples_offset, samples - 1);
             samples_offset = samples - 1;
         }
@@ -749,13 +749,13 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
 
     /* We didn't write the first sample */
     if (start_offset) {
-        upipe_err_va(upipe, "[%d] MISSED %"PRId64" start samples",
+        upipe_err_va(upipe, "[%d] MISSED %" PRId64" start samples",
                 upipe_bmd_sink_sub->channel_idx/2, start_offset);
     }
 
     /* We didn't write the last sample */
     if (end_offset < samples) {
-        upipe_err_va(upipe, "[%d] MISSED %"PRIu64" end samples, last pts %f (%u urefs buffered)",
+        upipe_err_va(upipe, "[%d] MISSED %" PRIu64" end samples, last pts %f (%u urefs buffered)",
                 upipe_bmd_sink_sub->channel_idx/2,
                 samples - end_offset, pts_to_time(last_pts),
                 uqueue_length(&upipe_bmd_sink_sub->uqueue));
@@ -801,7 +801,7 @@ static inline unsigned audio_samples_count(struct upipe_bmd_sink *upipe_bmd_sink
 
     if (unlikely(timeScale != 30000 && timeScale != 60000)) {
         upipe_err_va(&upipe_bmd_sink->upipe,
-                "Unsupported rate %"PRIu64"/%"PRIu64, timeScale, timeValue);
+                "Unsupported rate %" PRIu64"/%" PRIu64, timeScale, timeValue);
         return samples;
     }
 
@@ -906,7 +906,7 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
         uint64_t subpic_pts = 0;
         uref_clock_get_pts_sys(subpic, &subpic_pts);
         subpic_pts += subpic_sub->latency;
-        //printf("\n SUBPIC PTS %"PRIu64" \n", subpic_pts );
+        //printf("\n SUBPIC PTS %" PRIu64" \n", subpic_pts );
 
         /* Delete old urefs */
         if (subpic_pts + (UCLOCK_FREQ/25) < pts) {
@@ -921,7 +921,7 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
         }
 
         /* Choose the closest subpic in the past */
-        //printf("\n CHOSEN SUBPIC %"PRIu64" \n", subpic_pts);
+        //printf("\n CHOSEN SUBPIC %" PRIu64" \n", subpic_pts);
         const uint8_t *buf;
         int size = -1;
         if (ubase_check(uref_block_read(subpic, 0, &size, &buf))) {
@@ -1059,7 +1059,7 @@ static void output_cb(struct upipe *upipe)
         }
 
         if (pts + upipe_bmd_sink->ticks_per_frame / 2 < vid_pts) {
-            upipe_err_va(upipe, "pic %.2f too early by %.2f ms | %"PRIu64"",
+            upipe_err_va(upipe, "pic %.2f too early by %.2f ms | %" PRIu64"",
                     pts_to_time(vid_pts),
                     dur_to_time(1000 * (vid_pts - pts)),
                     vid_pts - pts
@@ -1125,7 +1125,7 @@ static bool upipe_bmd_sink_sub_output(struct upipe *upipe, struct uref *uref)
         upipe_bmd_sink_sub->latency = 0;
 
         uref_clock_get_latency(uref, &upipe_bmd_sink_sub->latency);
-        upipe_dbg_va(upipe, "latency %"PRIu64, upipe_bmd_sink_sub->latency);
+        upipe_dbg_va(upipe, "latency %" PRIu64, upipe_bmd_sink_sub->latency);
         uint8_t data_type = 0;
         uref_attr_get_small_unsigned(uref, &data_type, UDICT_TYPE_SMALL_UNSIGNED, "data_type");
         upipe_bmd_sink_sub->dolby_e = data_type == 28; // dolby e, see s338m
@@ -1247,7 +1247,7 @@ uint32_t upipe_bmd_mode_from_flow_def(struct upipe *upipe, struct uref *flow_def
 
     bool interlaced = !ubase_check(uref_pic_get_progressive(flow_def));
 
-    upipe_notice_va(upipe, "%"PRIu64"x%"PRIu64" %"PRId64"/%"PRIu64" interlaced %d",
+    upipe_notice_va(upipe, "%" PRIu64"x%" PRIu64" %" PRId64"/%" PRIu64" interlaced %d",
             hsize, vsize, fps.num, fps.den, interlaced);
 
     IDeckLinkDisplayModeIterator *displayModeIterator = NULL;
@@ -1332,7 +1332,7 @@ static int upipe_bmd_sink_sub_set_flow_def(struct upipe *upipe,
     uint64_t latency;
     if (ubase_check(uref_clock_get_latency(flow_def, &latency))) {
         if (/*upipe_bmd_sink_sub->latency && */latency != upipe_bmd_sink_sub->latency) {
-            upipe_dbg_va(upipe, "latency %"PRIu64" -> %"PRIu64,
+            upipe_dbg_va(upipe, "latency %" PRIu64" -> %" PRIu64,
                     upipe_bmd_sink_sub->latency, latency);
             upipe_bmd_sink_sub->latency = latency;
         }
@@ -1499,7 +1499,7 @@ static uint64_t uclock_bmd_sink_now(struct uclock *uclock)
 
     hardware_time += upipe_bmd_sink->offset;
 
-    if (0) upipe_notice_va(upipe, "CLOCK THR 0x%llx VAL %"PRIu64,
+    if (0) upipe_notice_va(upipe, "CLOCK THR 0x%llx VAL %" PRIu64,
         (unsigned long long)pthread_self(), (uint64_t)hardware_time);
 
     return (uint64_t)hardware_time;
