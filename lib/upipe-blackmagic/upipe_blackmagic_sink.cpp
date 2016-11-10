@@ -693,7 +693,7 @@ static void upipe_bmd_sink_sub_sound_get_samples_channel(struct upipe *upipe,
 
         /* FIXME */
         if (samples_offset != end_offset) {
-            if (llabs((int64_t)samples_offset - (int64_t)end_offset <= max_sample_drift))
+            if (llabs((int64_t)samples_offset - (int64_t)end_offset) <= max_sample_drift)
                 samples_offset = end_offset;
             else
                 upipe_err_va(upipe, "[%d] Mismatching offsets: SAMPLES %" PRIu64" != %u END",
