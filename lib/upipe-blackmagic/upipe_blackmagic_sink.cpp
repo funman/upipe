@@ -359,9 +359,13 @@ public:
         pthread_mutex_lock(&upipe_bmd_sink->cb_lock);
         output_cb(&upipe_bmd_sink->pic_subpipe.upipe);
         pthread_mutex_unlock(&upipe_bmd_sink->cb_lock);
+        return S_OK;
     }
 
-    virtual HRESULT ScheduledPlaybackHasStopped (void) {}
+    virtual HRESULT ScheduledPlaybackHasStopped (void)
+    {
+        return S_OK;
+    }
 
     callback(struct upipe_bmd_sink *upipe_bmd_sink_) {
         upipe_bmd_sink = upipe_bmd_sink_;
