@@ -215,7 +215,7 @@ void sdi_encode_ttx(uint16_t *buf, int f2, int packets, const uint8_t **packet, 
     buf[ANC_START_LEN+3] = 0x2; /* WST Teletext subtitles */
 
     /* Data Adaption header, 5 packets max */
-    memset(&buf[ANC_START_LEN + OP47_INITIAL_WORDS], 0x00, 5);
+    memset(&buf[ANC_START_LEN + OP47_INITIAL_WORDS], 0x00, 5 * sizeof(uint16_t));
 
     for (int j = 0; j < packets; j++) {
         const uint8_t *pic_data = packet[j];
@@ -233,7 +233,7 @@ void sdi_encode_ttx(uint16_t *buf, int f2, int packets, const uint8_t **packet, 
         int idx = OP47_STRUCT_B_OFFSET + 45 * packets;
 
         /* 2x Run in codes */
-        memset(&buf[idx], 0x55, 2);
+        memset(&buf[idx], 0x55, 2 * sizeof(uint16_t));
 
         /* Framing code, MRAG and the data */
         for (int i = 0; i < 43; i++)
