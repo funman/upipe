@@ -1668,7 +1668,8 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
         upipe_bmd_sink->sp.synchronous  = TRUE;
     }
 
-    deckLinkOutput->SetScheduledFrameCompletionCallback(upipe_bmd_sink->cb);
+    if (deckLinkOutput->SetScheduledFrameCompletionCallback(upipe_bmd_sink->cb) != S_OK)
+        upipe_err(upipe, "Could not set callback");
 end:
     if (displayModeIterator != NULL)
         displayModeIterator->Release();
