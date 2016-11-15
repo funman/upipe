@@ -503,7 +503,6 @@ static void upipe_bmd_sink_sub_free(struct upipe *upipe)
 
     if (upipe_bmd_sink_sub == &upipe_bmd_sink->pic_subpipe && upipe_bmd_sink->deckLink) {
         pthread_mutex_lock(&upipe_bmd_sink->cb_lock);
-        upipe_bmd_sink->deckLinkOutput->SetScheduledFrameCompletionCallback(NULL);
         upipe_bmd_sink->deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
         upipe_bmd_sink->deckLinkOutput->DisableVideoOutput();
         upipe_bmd_sink->deckLinkOutput->DisableAudioOutput();
