@@ -1570,14 +1570,18 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
     int err = UBASE_ERR_NONE;
     HRESULT result = E_NOINTERFACE;
 
+    uqueue_uref_flush(&upipe_bmd_sink->pic_subpipe.uqueue);
+
     if (upipe_bmd_sink->displayMode) {
         if (upipe_bmd_sink->video_frame) {
             upipe_bmd_sink->video_frame->Release();
             upipe_bmd_sink->video_frame = NULL;
         }
-        deckLinkOutput->SetScheduledFrameCompletionCallback(NULL);
         deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
         deckLinkOutput->DisableAudioOutput();
+        upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
+        deckLinkOutput->DisableVideoOutput();
+        upipe_bmd_sink->ticks_per_frame = 0;
         upipe_bmd_sink->displayMode->Release();
     }
 
@@ -1616,12 +1620,6 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
 
     upipe_bmd_sink->displayMode = displayMode;
 
-    /* disable video the shortest time possible, to keep clock running */
-
-    upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
-    uqueue_uref_flush(&upipe_bmd_sink->pic_subpipe.uqueue);
-    deckLinkOutput->DisableVideoOutput();
-    upipe_bmd_sink->ticks_per_frame = 0;
     result = deckLinkOutput->EnableVideoOutput(displayMode->GetDisplayMode(),
                                                bmdVideoOutputVANC);
     if (result != S_OK)
