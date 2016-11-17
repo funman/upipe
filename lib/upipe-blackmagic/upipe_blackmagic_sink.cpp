@@ -861,9 +861,15 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
 
     if (upipe_bmd_sink->video_frame)
         upipe_bmd_sink->video_frame->Release();
+    upipe_bmd_sink->video_frame = NULL;
 
     IDeckLinkVideoFrameAncillary *ancillary = NULL;
-    upipe_bmd_sink->deckLinkOutput->CreateAncillaryData(video_frame->GetPixelFormat(), &ancillary);
+    HRESULT res = upipe_bmd_sink->deckLinkOutput->CreateAncillaryData(video_frame->GetPixelFormat(), &ancillary);
+    if (res != S_OK) {
+        upipe_err(upipe, "Could not create ancillary data");
+        delete video_frame;
+        return NULL;
+    }
 
     const uint8_t *pic_data = NULL;
     size_t pic_data_size = 0;
