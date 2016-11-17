@@ -1033,8 +1033,6 @@ static void output_cb(struct upipe *upipe)
         }
         vid_pts += upipe_bmd_sink_sub->latency;
 
-        uint64_t now = uclock_now(&upipe_bmd_sink->uclock);
-
         if (now < vid_pts) {
             upipe_err_va(upipe, "Picture buffering screwed (%.2f < %.2f), rebuffering",
                     pts_to_time(now), pts_to_time(vid_pts));
@@ -1090,7 +1088,6 @@ static void output_cb(struct upipe *upipe)
 
     /* Restart playback 4s after genlock transition */
     if (upipe_bmd_sink->genlock_transition_time) {
-        uint64_t now = uclock_now(&upipe_bmd_sink->uclock);
         if (now > upipe_bmd_sink->genlock_transition_time + 4 * UCLOCK_FREQ) {
             upipe_warn(upipe, "restarting playback after genlock synchronization");
             upipe_bmd_sink->genlock_transition_time = 0;
