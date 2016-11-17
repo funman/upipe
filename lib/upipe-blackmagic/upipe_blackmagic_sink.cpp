@@ -1577,16 +1577,17 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
     uqueue_uref_flush(&upipe_bmd_sink->pic_subpipe.uqueue);
 
     if (upipe_bmd_sink->displayMode) {
-        if (upipe_bmd_sink->video_frame) {
-            upipe_bmd_sink->video_frame->Release();
-            upipe_bmd_sink->video_frame = NULL;
-        }
+        deckLinkOutput->SetScheduledFrameCompletionCallback(NULL);
         deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
         deckLinkOutput->DisableAudioOutput();
         upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
         deckLinkOutput->DisableVideoOutput();
         upipe_bmd_sink->ticks_per_frame = 0;
         upipe_bmd_sink->displayMode->Release();
+        if (upipe_bmd_sink->video_frame) {
+            upipe_bmd_sink->video_frame->Release();
+            upipe_bmd_sink->video_frame = NULL;
+        }
     }
 
     upipe_bmd_sink->pts = 0;
