@@ -417,9 +417,7 @@ static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
             continue;
 
         uint8_t line_offset = pic_data[2] & 0x1f;
-        // XXX: verify. 1 means first field
-        // according to EN 300 472
-        uint8_t f2 = (pic_data[2] >> 5) & 1;
+        uint8_t f2 = !((pic_data[2] >> 5) & 1);
         if (f2 == 0 && line_offset == 0) // line == 0
             continue;
 
