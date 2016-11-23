@@ -941,7 +941,6 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
             uref_block_unmap(subpic, 0);
         }
         uref_free(subpic);
-        break;
     }
 
     video_frame->SetAncillaryData(ancillary);
