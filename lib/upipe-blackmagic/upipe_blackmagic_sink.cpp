@@ -1554,6 +1554,8 @@ static void upipe_bmd_stop(struct upipe *upipe)
     upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
     deckLinkOutput->DisableVideoOutput();
 
+    upipe_bmd_sink->pts = 0;
+    uatomic_store(&upipe_bmd_sink->preroll, PREROLL_FRAMES);
     upipe_bmd_sink->ticks_per_frame = 0;
 
     if (upipe_bmd_sink->displayMode) {
@@ -1580,9 +1582,6 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
     uqueue_uref_flush(&upipe_bmd_sink->pic_subpipe.uqueue);
 
     upipe_bmd_stop(upipe);
-
-    upipe_bmd_sink->pts = 0;
-    uatomic_store(&upipe_bmd_sink->preroll, PREROLL_FRAMES);
 
     result = deckLinkOutput->GetDisplayModeIterator(&displayModeIterator);
     if (result != S_OK){
