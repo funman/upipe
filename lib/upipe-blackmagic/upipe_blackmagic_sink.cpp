@@ -228,7 +228,8 @@ struct upipe_bmd_sink {
     /** list of input subpipes */
     struct uchain inputs;
 
-    /** lock the list of subpipes */
+    /** lock the list of subpipes, they are iterated from the
+     * decklink callback */
     pthread_mutex_t lock;
 
     /** makes sure the sink is alive while in callback */
