@@ -778,13 +778,11 @@ static void upipe_bmd_sink_sub_sound_get_samples(struct upipe *upipe,
             samples * DECKLINK_CHANNELS * sizeof(int32_t));
 
     /* interate through input subpipes */
-    struct upipe *sub = NULL;
-
     pthread_mutex_lock(&upipe_bmd_sink->lock);
-    while (ubase_check(upipe_bmd_sink_iterate_sub(upipe, &sub)) && sub) {
+    struct uchain *uchain = NULL;
+    ulist_foreach(&upipe_bmd_sink->inputs, uchain) {
         struct upipe_bmd_sink_sub *upipe_bmd_sink_sub =
-            upipe_bmd_sink_sub_from_upipe(sub);
-
+            upipe_bmd_sink_sub_from_uchain(uchain);
         if (upipe_bmd_sink_sub->sound)
             upipe_bmd_sink_sub_sound_get_samples_channel(upipe, video_pts, samples, upipe_bmd_sink_sub);
     }
