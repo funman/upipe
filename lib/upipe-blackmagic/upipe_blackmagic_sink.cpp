@@ -1554,6 +1554,13 @@ static void upipe_bmd_stop(struct upipe *upipe)
     upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
     deckLinkOutput->DisableVideoOutput();
 
+    struct uchain *uchain = NULL;
+    ulist_foreach(&upipe_bmd_sink->inputs, uchain) {
+        struct upipe_bmd_sink_sub *upipe_bmd_sink_sub =
+            upipe_bmd_sink_sub_from_uchain(uchain);
+        uqueue_uref_flush(&upipe_bmd_sink_sub->uqueue);
+    }
+
     upipe_bmd_sink->pts = 0;
     uatomic_store(&upipe_bmd_sink->preroll, PREROLL_FRAMES);
     upipe_bmd_sink->ticks_per_frame = 0;
@@ -1578,8 +1585,6 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
     IDeckLinkDisplayMode* displayMode = NULL;
     int err = UBASE_ERR_NONE;
     HRESULT result = E_NOINTERFACE;
-
-    uqueue_uref_flush(&upipe_bmd_sink->pic_subpipe.uqueue);
 
     upipe_bmd_stop(upipe);
 
