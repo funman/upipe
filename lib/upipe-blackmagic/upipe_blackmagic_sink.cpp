@@ -232,9 +232,6 @@ struct upipe_bmd_sink {
      * decklink callback */
     pthread_mutex_t lock;
 
-    /** makes sure the sink is alive while in callback */
-    pthread_mutex_t cb_lock;
-
     /** card index **/
     int card_idx;
 
@@ -357,9 +354,7 @@ public:
 #endif
 
         /* next frame */
-        pthread_mutex_lock(&upipe_bmd_sink->cb_lock);
         output_cb(&upipe_bmd_sink->pic_subpipe.upipe);
-        pthread_mutex_unlock(&upipe_bmd_sink->cb_lock);
         return S_OK;
     }
 
@@ -502,15 +497,11 @@ static void upipe_bmd_sink_sub_free(struct upipe *upipe)
         upipe_bmd_sink_from_sub_mgr(upipe->mgr);
 
     if (upipe_bmd_sink_sub == &upipe_bmd_sink->pic_subpipe && upipe_bmd_sink->deckLink) {
-        pthread_mutex_lock(&upipe_bmd_sink->cb_lock);
-        upipe_bmd_sink->deckLinkOutput->SetScheduledFrameCompletionCallback(NULL);
         upipe_bmd_sink->deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
         upipe_bmd_sink->deckLinkOutput->DisableVideoOutput();
         upipe_bmd_sink->deckLinkOutput->DisableAudioOutput();
         if (upipe_bmd_sink->video_frame)
             upipe_bmd_sink->video_frame->Release();
-
-        pthread_mutex_unlock(&upipe_bmd_sink->cb_lock);
     }
 
     pthread_mutex_lock(&upipe_bmd_sink->lock);
@@ -1542,7 +1533,6 @@ static struct upipe *upipe_bmd_sink_alloc(struct upipe_mgr *mgr,
     upipe_bmd_sink_init_urefcount(upipe);
 
     pthread_mutex_init(&upipe_bmd_sink->lock, NULL);
-    pthread_mutex_init(&upipe_bmd_sink->cb_lock, NULL);
 
     /* Initalise subpipes */
     upipe_bmd_sink_sub_init(upipe_bmd_sink_sub_to_upipe(upipe_bmd_sink_to_pic_subpipe(upipe_bmd_sink)),
@@ -1574,7 +1564,6 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
     uqueue_uref_flush(&upipe_bmd_sink->pic_subpipe.uqueue);
 
     if (upipe_bmd_sink->displayMode) {
-        deckLinkOutput->SetScheduledFrameCompletionCallback(NULL);
         deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
         deckLinkOutput->DisableAudioOutput();
         upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
@@ -1667,8 +1656,6 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
         upipe_bmd_sink->sp.synchronous  = TRUE;
     }
 
-    if (deckLinkOutput->SetScheduledFrameCompletionCallback(upipe_bmd_sink->cb) != S_OK)
-        upipe_err(upipe, "Could not set callback");
 end:
     if (displayModeIterator != NULL)
         displayModeIterator->Release();
@@ -1736,6 +1723,9 @@ static int upipe_bmd_sink_open_card(struct upipe *upipe)
     }
 
     upipe_bmd_sink->cb = new callback(upipe_bmd_sink);
+    if (upipe_bmd_sink->deckLinkOutput->SetScheduledFrameCompletionCallback(
+                upipe_bmd_sink->cb) != S_OK)
+        upipe_err(upipe, "Could not set callback");
 
     upipe_bmd_sink->deckLink = deckLink;
 
@@ -1965,7 +1955,6 @@ static void upipe_bmd_sink_free(struct upipe *upipe)
     }
 
     pthread_mutex_destroy(&upipe_bmd_sink->lock);
-    pthread_mutex_destroy(&upipe_bmd_sink->cb_lock);
 
     if (upipe_bmd_sink->cb)
         upipe_bmd_sink->cb->Release();
