@@ -990,6 +990,8 @@ static void output_cb(struct upipe *upipe)
 
     /* PTS for this output frame */
     uint64_t pts = upipe_bmd_sink->pts;
+    if (pts == 0)
+        return;
 
     uint64_t now = uclock_now(&upipe_bmd_sink->uclock);
     if (0) upipe_notice_va(upipe, "PTS %.2f - %.2f - %u pics",
@@ -1546,6 +1548,7 @@ static void upipe_bmd_stop(struct upipe *upipe)
     struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_upipe(upipe);
     IDeckLinkOutput *deckLinkOutput = upipe_bmd_sink->deckLinkOutput;
 
+    upipe_bmd_sink->pts = 0;
     deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
     deckLinkOutput->DisableAudioOutput();
     /* bump clock upwards before it's made unavailable by DisableVideoOutput */
@@ -1559,7 +1562,6 @@ static void upipe_bmd_stop(struct upipe *upipe)
         uqueue_uref_flush(&upipe_bmd_sink_sub->uqueue);
     }
 
-    upipe_bmd_sink->pts = 0;
     uatomic_store(&upipe_bmd_sink->preroll, PREROLL_FRAMES);
 
     if (upipe_bmd_sink->displayMode) {
