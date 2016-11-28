@@ -496,14 +496,6 @@ static void upipe_bmd_sink_sub_free(struct upipe *upipe)
     struct upipe_bmd_sink *upipe_bmd_sink =
         upipe_bmd_sink_from_sub_mgr(upipe->mgr);
 
-    if (upipe_bmd_sink_sub == &upipe_bmd_sink->pic_subpipe && upipe_bmd_sink->deckLink) {
-        upipe_bmd_sink->deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
-        upipe_bmd_sink->deckLinkOutput->DisableVideoOutput();
-        upipe_bmd_sink->deckLinkOutput->DisableAudioOutput();
-        if (upipe_bmd_sink->video_frame)
-            upipe_bmd_sink->video_frame->Release();
-    }
-
     pthread_mutex_lock(&upipe_bmd_sink->lock);
     upipe_throw_dead(upipe);
 
@@ -1551,6 +1543,30 @@ static struct upipe *upipe_bmd_sink_alloc(struct upipe_mgr *mgr,
     return upipe;
 }
 
+static void upipe_bmd_stop(struct upipe *upipe)
+{
+    struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_upipe(upipe);
+    IDeckLinkOutput *deckLinkOutput = upipe_bmd_sink->deckLinkOutput;
+
+    deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
+    deckLinkOutput->DisableAudioOutput();
+    /* bump clock upwards before it's made unavailable by DisableVideoOutput */
+    upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
+    deckLinkOutput->DisableVideoOutput();
+
+    upipe_bmd_sink->ticks_per_frame = 0;
+
+    if (upipe_bmd_sink->displayMode) {
+        upipe_bmd_sink->displayMode->Release();
+        upipe_bmd_sink->displayMode = NULL;
+    }
+
+    if (upipe_bmd_sink->video_frame) {
+        upipe_bmd_sink->video_frame->Release();
+        upipe_bmd_sink->video_frame = NULL;
+    }
+}
+
 static int upipe_bmd_open_vid(struct upipe *upipe)
 {
     struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_upipe(upipe);
@@ -1563,18 +1579,7 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
 
     uqueue_uref_flush(&upipe_bmd_sink->pic_subpipe.uqueue);
 
-    if (upipe_bmd_sink->displayMode) {
-        deckLinkOutput->StopScheduledPlayback(0, NULL, 0);
-        deckLinkOutput->DisableAudioOutput();
-        upipe_bmd_sink->offset = uclock_now(&upipe_bmd_sink->uclock);
-        deckLinkOutput->DisableVideoOutput();
-        upipe_bmd_sink->ticks_per_frame = 0;
-        upipe_bmd_sink->displayMode->Release();
-        if (upipe_bmd_sink->video_frame) {
-            upipe_bmd_sink->video_frame->Release();
-            upipe_bmd_sink->video_frame = NULL;
-        }
-    }
+    upipe_bmd_stop(upipe);
 
     upipe_bmd_sink->pts = 0;
     uatomic_store(&upipe_bmd_sink->preroll, PREROLL_FRAMES);
@@ -1940,6 +1945,9 @@ static void upipe_bmd_sink_free(struct upipe *upipe)
 {
     struct upipe_bmd_sink *upipe_bmd_sink = upipe_bmd_sink_from_upipe(upipe);
 
+    if (upipe_bmd_sink->deckLink)
+        upipe_bmd_stop(upipe);
+
     upipe_bmd_sink_sub_free(upipe_bmd_sink_sub_to_upipe(&upipe_bmd_sink->pic_subpipe));
     upipe_bmd_sink_sub_free(upipe_bmd_sink_sub_to_upipe(&upipe_bmd_sink->subpic_subpipe));
     upipe_dbg_va(upipe, "releasing blackmagic sink pipe %p", upipe);
@@ -1950,7 +1958,6 @@ static void upipe_bmd_sink_free(struct upipe *upipe)
 
     if (upipe_bmd_sink->deckLink) {
         upipe_bmd_sink->deckLinkOutput->Release();
-        upipe_bmd_sink->displayMode->Release();
         upipe_bmd_sink->deckLink->Release();
     }
 
