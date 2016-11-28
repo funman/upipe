@@ -589,6 +589,7 @@ static int upipe_rtp_fec_check(struct upipe *upipe, struct uref *flow_format)
     if (flow_format != NULL)
         upipe_rtp_fec_store_flow_def(upipe, flow_format);
 
+    upipe_rtp_fec_check_upump_mgr(upipe);
     if (upipe_rtp_fec->uref_mgr == NULL) {
         upipe_rtp_fec_require_uref_mgr(upipe);
         return UBASE_ERR_NONE;
