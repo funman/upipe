@@ -1480,8 +1480,6 @@ static uint64_t uclock_bmd_sink_now(struct uclock *uclock)
     if (res != S_OK) {
         upipe_err_va(upipe, "\t\tCouldn't read hardware clock: 0x%08lx", res);
         hardware_time = 0;
-    } else if (unlikely(upipe_bmd_sink->ticks_per_frame == 0)) {
-        upipe_bmd_sink->ticks_per_frame = ticks_per_frame;
     }
 
     hardware_time += upipe_bmd_sink->offset;
@@ -1563,7 +1561,6 @@ static void upipe_bmd_stop(struct upipe *upipe)
 
     upipe_bmd_sink->pts = 0;
     uatomic_store(&upipe_bmd_sink->preroll, PREROLL_FRAMES);
-    upipe_bmd_sink->ticks_per_frame = 0;
 
     if (upipe_bmd_sink->displayMode) {
         upipe_bmd_sink->displayMode->Release();
@@ -1619,6 +1616,11 @@ static int upipe_bmd_open_vid(struct upipe *upipe)
     }
 
     upipe_bmd_sink->displayMode = displayMode;
+
+    BMDTimeValue timeValue;
+    BMDTimeScale timeScale;
+    displayMode->GetFrameRate(&timeValue, &timeScale);
+    upipe_bmd_sink->ticks_per_frame = UCLOCK_FREQ * timeValue / timeScale;
 
     result = deckLinkOutput->EnableVideoOutput(displayMode->GetDisplayMode(),
                                                bmdVideoOutputVANC);
