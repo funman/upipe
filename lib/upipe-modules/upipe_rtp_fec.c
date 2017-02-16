@@ -154,7 +154,6 @@ static void upipe_rtp_fec_extract_parameters(struct uref *fec_uref,
 /* Delete main packets older than the reference point */
 static void clear_main_list(struct uchain *main_list, uint16_t snbase)
 {
-    printf("delete main < %hu\n", snbase);
     struct uchain *uchain, *uchain_tmp;
 
     ulist_delete_foreach (main_list, uchain, uchain_tmp) {
@@ -171,7 +170,6 @@ static void clear_main_list(struct uchain *main_list, uint16_t snbase)
 /* Delete FEC packets older than the reference point */
 static void clear_fec_list(struct uchain *fec_list, uint16_t last_fec_snbase)
 {
-    printf("delete fec < %hu\n", last_fec_snbase);
     struct uchain *uchain, *uchain_tmp;
     ulist_delete_foreach (fec_list, uchain, uchain_tmp) {
         struct uref *fec_uref = uref_from_uchain(uchain);
@@ -227,7 +225,6 @@ static void insert_ordered_uref(struct uchain *queue, struct uref *uref)
 static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         struct uref *fec_uref, uint16_t *seqnum_list, int items)
 {
-    upipe_dbg_va(upipe, "%s(%d)", __func__, items);
     struct upipe_rtp_fec *upipe_rtp_fec = upipe_rtp_fec_from_upipe(upipe);
 
     bool found_seqnum[FEC_MAX] = {0};
@@ -244,8 +241,6 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
                 continue;
 
             found_seqnum[i] = true;
-            upipe_notice_va(upipe, "found %hu", seqnum);
-
             if (++processed < items)
                 break; /* next uref */
 
@@ -262,7 +257,7 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         return;
     }
 
-    abort(); // XXX: when we have loss
+    //abort(); // XXX: when we have loss
 
     /* Extract parameters from FEC packet */
     uint16_t length_rec;
@@ -363,9 +358,6 @@ static void upipe_rtp_fec_apply_col_fec(struct upipe *upipe)
             break;
 
         ulist_pop(&upipe_rtp_fec->col_queue);
-
-        upipe_dbg_va(upipe, "%s() first %u low %hu",
-                __func__, upipe_rtp_fec->first_seqnum, snbase_low);
 
         /* If no current matrix is being processed and we have enough packets
          * set existing matrix to the snbase value */
@@ -582,15 +574,12 @@ static bool upipe_rtp_fec_main_input(struct upipe *upipe, struct uref *uref)
     if (!first_uchain)
         return fec_change;
 
-    printf("HELLO\n");
-
     struct uref *first_uref = uref_from_uchain(first_uchain);
     upipe_rtp_fec->first_seqnum = first_uref->priv;
 
     /* Make sure we have at least two matrices of data as per the spec */
     seq_delta = seqnum - upipe_rtp_fec->first_seqnum - 1;
     if (seq_delta < 2*matrix_size || seq_delta == UINT16_MAX) {
-        printf("SHIT\n");
         return fec_change;
     }
 
