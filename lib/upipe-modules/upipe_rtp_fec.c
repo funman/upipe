@@ -571,7 +571,7 @@ static void upipe_rtp_fec_main_input(struct upipe *upipe, struct uref *uref)
         seq_delta = -seq_delta; // XXX ?
 
     /* Resync if packet is too old or too new */
-    int two_matrix_size = 2 * upipe_rtp_fec->cols * upipe_rtp_fec->rows;
+    unsigned int two_matrix_size = 2 * upipe_rtp_fec->cols * upipe_rtp_fec->rows;
     bool fec_change = false;
     if (upipe_rtp_fec->last_seqnum != UINT32_MAX && seq_delta > two_matrix_size) {
         upipe_warn_va(upipe, "resync");
