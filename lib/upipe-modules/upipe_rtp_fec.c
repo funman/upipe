@@ -285,6 +285,7 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
             if (seqnum_list[i] == uref->priv) {
                 size_t uref_len = 0;
                 uref_block_size(uref, &uref_len);
+                uref_len -= RTP_HEADER_SIZE;
 
                 length_rec ^= uref_len;
                 ts_rec ^= timestamp;
@@ -292,11 +293,10 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         }
     }
 
-//    if (length_rec != 7 * TS_SIZE)
+    if (length_rec != 7 * TS_SIZE)
         upipe_warn_va(upipe_rtp_fec_to_upipe(upipe_rtp_fec),
                 "DUBIOUS REC LEN %i timestamp %u", length_rec, ts_rec);
 
-    // FIXME: missing RTP header
     uref_block_resize(fec_uref, SMPTE_2022_FEC_HEADER_SIZE, -1);
     uint8_t *dst;
     int size = length_rec + RTP_HEADER_SIZE;
@@ -340,9 +340,11 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         }
 
     upipe_warn_va(&upipe_rtp_fec->upipe, "Corrected packet. Sequence number: %u", missing_seqnum);
+    fec_uref->priv = missing_seqnum;
     rtp_set_seqnum(dst, missing_seqnum);
     rtp_set_timestamp(dst, ts_rec);
     uref_block_unmap(fec_uref, 0);
+    uref_block_resize(fec_uref, 0, size);
 
     insert_ordered_uref(&upipe_rtp_fec->main_queue, fec_uref);
 }
@@ -443,7 +445,7 @@ static void upipe_rtp_fec_timer(struct upump *upump)
         uint64_t date_sys = UINT64_MAX;
         int type;
         uref_clock_get_date_sys(uref, &date_sys, &type);
-        uint64_t seqnum = uref->priv;
+        uint64_t seqnum = uref->priv & UINT32_MAX;
 
         if (date_sys != UINT64_MAX) {
             // TODO: replace by output latency
