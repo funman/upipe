@@ -282,7 +282,7 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
 
         /* Recover length and timestamp of missing packet */
         for (int i = 0; i < items; i++) {
-            if(seqnum_list[i] == uref->priv) {
+            if (seqnum_list[i] == uref->priv) {
                 size_t uref_len = 0;
                 uref_block_size(uref, &uref_len);
 
@@ -652,21 +652,26 @@ static void upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
     uref->priv |= (snbase_low << 32);
     uref_block_peek_unmap(uref, RTP_HEADER_SIZE, fec_buffer, fec_header);
 
-    if (upipe == upipe_rtp_fec_to_col_subpipe(upipe_rtp_fec)) {
+    bool col = (upipe == upipe_rtp_fec_to_col_subpipe(upipe_rtp_fec));
+    struct uchain *queue = col ? &upipe_rtp_fec->col_queue :
+        &upipe_rtp_fec->row_queue;
+
+    if (col) {
         if (d) {
             upipe_warn(upipe, "Invalid column FEC packet found, ignoring");
-            uref_free(uref);
-            return;
+            goto invalid;
         }
 
-        if(!offset || !na) {
+        if (!offset || !na) {
             upipe_warn(upipe, "Invalid row/column in FEC packet, ignoring");
-            uref_free(uref);
-            return;
+            goto invalid;
         }
 
-        if (upipe_rtp_fec->cols != offset && upipe_rtp_fec->cols <= FEC_MAX &&
-                upipe_rtp_fec->rows <= FEC_MAX) {
+        if (offset > FEC_MAX || na > FEC_MAX) {
+            upipe_err_va(upipe, "%ux%u matrix is too large (> %ux%u)",
+                    offset, na, FEC_MAX, FEC_MAX);
+            goto invalid;
+        } else if (upipe_rtp_fec->cols != offset) {
             upipe_rtp_fec->cols = offset;
             upipe_rtp_fec->rows = na;
 
@@ -674,21 +679,20 @@ static void upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
                     upipe_rtp_fec->cols);
             clear_fec(upipe_rtp_fec_to_upipe(upipe_rtp_fec));
         }
-
-        insert_ordered_uref(&upipe_rtp_fec->col_queue, uref);
-        upipe_rtp_fec->pkts_since_last_fec = 0;
-        return;
+    } else {
+        assert(upipe == upipe_rtp_fec_to_row_subpipe(upipe_rtp_fec));
+        if (!d) {
+            upipe_warn(upipe, "Invalid row FEC packet found, ignoring");
+            goto invalid;
+        }
     }
 
-    assert(upipe == upipe_rtp_fec_to_row_subpipe(upipe_rtp_fec));
-    if (!d) {
-        upipe_warn(upipe, "Invalid row FEC packet found, ignoring");
-        uref_free(uref);
-        return;
-    }
-
-    insert_ordered_uref(&upipe_rtp_fec->row_queue, uref);
+    insert_ordered_uref(queue, uref);
     upipe_rtp_fec->pkts_since_last_fec = 0;
+    return;
+
+invalid:
+    uref_free(uref);
 }
 
 /** @internal @This handles input uref.
