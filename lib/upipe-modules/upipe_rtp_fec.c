@@ -308,7 +308,7 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         for (int i = 0; i < items; i++) {
             if (seqnum_list[i] == uref->priv) {
                 uref_block_size(uref, &size);
-                uint8_t payload_buf[188*7];
+                uint8_t payload_buf[TS_SIZE * 7]; // FIXME
                 const uint8_t *peek = uref_block_peek(uref, RTP_HEADER_SIZE, -1,
                         payload_buf);
                 for (int i = 0; i < size ; i++)
