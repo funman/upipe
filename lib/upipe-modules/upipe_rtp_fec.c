@@ -27,6 +27,7 @@
 #include <upipe-modules/upipe_rtp_fec.h>
 
 #include <bitstream/ietf/rtp.h>
+#include <bitstream/mpeg/ts.h>
 #include <bitstream/smpte/2022_1_fec.h>
 
 #define UPIPE_FEC_JITTER UCLOCK_FREQ/25
@@ -244,7 +245,7 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
             if (++processed < items)
                 break; /* next uref */
 
-            upipe_dbg_va(upipe, "no packet loss"); // XXX: verbose
+            upipe_verbose_va(upipe, "no packets lost");
             uref_free(fec_uref);
             return;
         }
@@ -256,8 +257,6 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         uref_free(fec_uref);
         return;
     }
-
-    //abort(); // XXX: when we have loss
 
     /* Extract parameters from FEC packet */
     uint16_t length_rec;
@@ -293,7 +292,7 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         }
     }
 
-    if (length_rec != 7 * 188)
+    if (length_rec != 7 * TS_SIZE + RTP_HEADER_SIZE)
         upipe_warn_va(upipe_rtp_fec_to_upipe(upipe_rtp_fec),
                 "DUBIOUS REC LEN %i", length_rec);
 
@@ -324,7 +323,7 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
     }
 
     // XXX
-    uint16_t missing_seqnum;
+    uint16_t missing_seqnum = 0;
     for (int i = 0; i < items; i++)
         if (!found_seqnum[i]) {
             missing_seqnum = seqnum_list[i];
@@ -453,7 +452,7 @@ static void upipe_rtp_fec_timer(struct upump *upump)
         if (upipe_rtp_fec->last_send_seqnum != UINT32_MAX) {
             uint16_t expected = upipe_rtp_fec->last_send_seqnum + 1;
             if (expected != seqnum) {
-                upipe_err_va(upipe, "FEC LOST expected seqnum %hu got %hu",
+                upipe_err_va(upipe, "FEC output LOST, expected seqnum %hu got %hu",
                         expected, seqnum);
             }
         }
@@ -482,39 +481,98 @@ static int upipe_rtp_fec_build_flow_def(struct upipe *upipe, struct uref *flow_d
     return UBASE_ERR_NONE;
 }
 
+/* Clear matrices if change of FEC */
+static void clear_fec(struct upipe *upipe)
+{
+    struct upipe_rtp_fec *upipe_rtp_fec = upipe_rtp_fec_from_upipe(upipe);
+
+    upipe_rtp_fec_clear(upipe_rtp_fec);
+
+    upipe_rtp_fec->first_seqnum = UINT32_MAX;
+    upipe_rtp_fec->last_seqnum = UINT32_MAX;
+    upipe_rtp_fec->latency = 0;
+
+    memset(upipe_rtp_fec->recent, 0xff, 2 * upipe_rtp_fec->rows *
+            upipe_rtp_fec->cols * sizeof(*upipe_rtp_fec->recent));
+}
+
+static void upipe_rtp_fec_start_timer(struct upipe *upipe, uint16_t seqnum)
+{
+    struct upipe_rtp_fec *upipe_rtp_fec = upipe_rtp_fec_from_sub_mgr(upipe->mgr);
+
+    /* Clear any old non-FEC packets */
+    clear_main_list(&upipe_rtp_fec->main_queue, upipe_rtp_fec->cur_matrix_snbase);
+
+    struct uchain *first_uchain = ulist_peek(&upipe_rtp_fec->main_queue);
+    if (!first_uchain)
+        return;
+
+    struct uref *first_uref = uref_from_uchain(first_uchain);
+    upipe_rtp_fec->first_seqnum = first_uref->priv;
+
+    /* Make sure we have at least two matrices of data as per the spec */
+    uint16_t seq_delta = seqnum - upipe_rtp_fec->first_seqnum - 1;
+    int two_matrix_size = 2 * upipe_rtp_fec->cols * upipe_rtp_fec->rows;
+    if (seq_delta < two_matrix_size || seq_delta == UINT16_MAX) {
+        return;
+    }
+
+    /* Calculate delay from first packet of matrix arriving to pump start time */
+    int type;
+    uint64_t date_sys = UINT64_MAX;
+    uref_clock_get_date_sys(first_uref, &date_sys, &type);
+
+    if (date_sys == UINT64_MAX) {
+        /* First packet having an unusable date_sys is not useful */
+        ulist_delete(first_uchain);
+        uref_free(first_uref);
+        first_uchain = ulist_peek(&upipe_rtp_fec->main_queue);
+        if (first_uchain) {
+            struct uref *uref = uref_from_uchain(first_uchain);
+            upipe_rtp_fec->first_seqnum = uref->priv;
+        }
+        return;
+    }
+
+    /* First packet of matrix can be recovered packet and have no date_sys */
+    uint64_t now = uclock_now(upipe_rtp_fec->uclock);
+    upipe_rtp_fec->latency = now - date_sys + UPIPE_FEC_JITTER;
+
+    /* Start pump that clears the buffer */
+    struct upump *upump = upump_alloc_timer(upipe_rtp_fec->upump_mgr,
+            upipe_rtp_fec_timer, &upipe_rtp_fec->upipe,
+            upipe_rtp_fec->upipe.refcount,
+            0, UCLOCK_FREQ/90000); // 300Hz ??!
+    upipe_rtp_fec_set_upump(&upipe_rtp_fec->upipe, upump);
+    upump_start(upump);
+}
+
 /* main */
-static bool upipe_rtp_fec_main_input(struct upipe *upipe, struct uref *uref)
+static void upipe_rtp_fec_main_input(struct upipe *upipe, struct uref *uref)
 {
     struct upipe_rtp_fec *upipe_rtp_fec = upipe_rtp_fec_from_sub_mgr(upipe->mgr);
     struct upipe *super_pipe = upipe_rtp_fec_to_upipe(upipe_rtp_fec);
 
-    bool fec_change = false;
-    int type;
-    uint64_t date_sys = 0;
     uint16_t seqnum = uref->priv;
-    uref_clock_get_date_sys(uref, &date_sys, &type);
 
-    if (upipe_rtp_fec->first_seqnum == UINT32_MAX) {
+    if (upipe_rtp_fec->first_seqnum == UINT32_MAX)
         upipe_rtp_fec->first_seqnum = seqnum;
-    }
 
     /* Output packets immediately if no FEC packets found as per spec */
     if (!upipe_rtp_fec->cols && !upipe_rtp_fec->rows) {
         upipe_rtp_fec->last_seqnum = seqnum;
-        upipe_dbg_va(upipe, "no FEC : output");
+        upipe_verbose_va(upipe, "no FEC detected");
         upipe_rtp_fec_output(&upipe_rtp_fec->upipe, uref, NULL);
-        return false;
+        return;
     }
 
-    int two_matrix_size = 2*(upipe_rtp_fec->cols*upipe_rtp_fec->rows);
-
-    uint16_t seq_delta;
-    if (seq_num_lt(seqnum, upipe_rtp_fec->last_seqnum))
-        seq_delta = upipe_rtp_fec->last_seqnum - seqnum;
-    else
-        seq_delta = seqnum - upipe_rtp_fec->last_seqnum;
+    uint16_t seq_delta = upipe_rtp_fec->last_seqnum - seqnum;
+    if (seq_delta > 0x8000)
+        seq_delta = -seq_delta; // XXX ?
 
     /* Resync if packet is too old or too new */
+    int two_matrix_size = 2 * upipe_rtp_fec->cols * upipe_rtp_fec->rows;
+    bool fec_change = false;
     if (upipe_rtp_fec->last_seqnum != UINT32_MAX && seq_delta > two_matrix_size) {
         upipe_warn_va(upipe, "resync");
         fec_change = true;
@@ -522,6 +580,10 @@ static bool upipe_rtp_fec_main_input(struct upipe *upipe, struct uref *uref)
     } else {
         upipe_rtp_fec->last_seqnum = seqnum;
         insert_ordered_uref(&upipe_rtp_fec->main_queue, uref);
+
+        int type;
+        uint64_t date_sys = 0;
+        uref_clock_get_date_sys(uref, &date_sys, &type);
 
         /* Owing to clock drift the latency of 2x the FEC matrix may increase
          * Build a continually updating duration and correct the latency if necessary.
@@ -547,7 +609,10 @@ static bool upipe_rtp_fec_main_input(struct upipe *upipe, struct uref *uref)
         upipe_rtp_fec->recent[new_idx].seqnum = seqnum;
     }
 
-    if (upipe_rtp_fec->cols && upipe_rtp_fec->rows) {
+    if (!upipe_rtp_fec->cols)
+        goto out;
+
+    if (upipe_rtp_fec->rows) {
         upipe_rtp_fec_apply_col_fec(super_pipe);
 
         uint32_t cur_row_fec_snbase = upipe_rtp_fec->cur_row_fec_snbase;
@@ -556,64 +621,19 @@ static bool upipe_rtp_fec_main_input(struct upipe *upipe, struct uref *uref)
 
         /* Wait for two rows to arrive to allow for late row FEC packets */
         uint16_t row_delta = seqnum - cur_row_fec_snbase - 1;
-        if (row_delta > 2*upipe_rtp_fec->cols)
+        if (row_delta > 2 * upipe_rtp_fec->cols)
             upipe_rtp_fec_apply_row_fec(super_pipe, cur_row_fec_snbase);
     }
 
-    if (!upipe_rtp_fec->cols || upipe_rtp_fec->upump ||
-            upipe_rtp_fec->cur_matrix_snbase == UINT32_MAX) {
-        return fec_change;
-    }
+    if (upipe_rtp_fec->cur_matrix_snbase == UINT32_MAX)
+        goto out;
 
-    int matrix_size = upipe_rtp_fec->cols * upipe_rtp_fec->rows;
+    if (!upipe_rtp_fec->upump)
+        upipe_rtp_fec_start_timer(upipe, seqnum);
 
-    /* Clear any old non-FEC packets */
-    clear_main_list(&upipe_rtp_fec->main_queue, upipe_rtp_fec->cur_matrix_snbase);
-
-    struct uchain *first_uchain = ulist_peek(&upipe_rtp_fec->main_queue);
-    if (!first_uchain)
-        return fec_change;
-
-    struct uref *first_uref = uref_from_uchain(first_uchain);
-    upipe_rtp_fec->first_seqnum = first_uref->priv;
-
-    /* Make sure we have at least two matrices of data as per the spec */
-    seq_delta = seqnum - upipe_rtp_fec->first_seqnum - 1;
-    if (seq_delta < 2*matrix_size || seq_delta == UINT16_MAX) {
-        return fec_change;
-    }
-
-    /* Calculate delay from first packet of matrix arriving to pump start time */
-    uref_clock_get_date_sys(first_uref, &date_sys, &type);
-
-    if (date_sys == UINT64_MAX) {
-        uref_dump(first_uref, upipe->uprobe);
-        abort();
-        /* First packet having an unusable date_sys is not useful */
-        ulist_delete(first_uchain);
-        uref_free(first_uref);
-        first_uchain = ulist_peek(&upipe_rtp_fec->main_queue);
-        if (first_uchain) {
-            first_uref = uref_from_uchain(first_uchain);
-            upipe_rtp_fec->first_seqnum = uref->priv; // what?
-        }
-        return fec_change;
-    }
-
-    /* First packet of matrix can be recovered packet and have no date_sys */
-    uint64_t now = uclock_now(upipe_rtp_fec->uclock);
-    upipe_rtp_fec->latency = now - date_sys + UPIPE_FEC_JITTER;
-
-    /* Start pump that clears the buffer */
-    struct upump *upump = upump_alloc_timer(upipe_rtp_fec->upump_mgr,
-            upipe_rtp_fec_timer, &upipe_rtp_fec->upipe,
-            upipe_rtp_fec->upipe.refcount,
-            0, UCLOCK_FREQ/90000); // 300Hz ??!
-    upipe_rtp_fec_set_upump(&upipe_rtp_fec->upipe, upump);
-    upump_start(upump);
-    upipe_dbg_va(upipe, "\tTIMER");
-
-    return fec_change;
+out:
+    if (fec_change)
+        clear_fec(super_pipe);
 }
 
 static int upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
@@ -622,8 +642,6 @@ static int upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
         upipe_rtp_fec_from_sub_mgr(upipe->mgr);
 
     uint8_t fec_buffer[SMPTE_2022_FEC_HEADER_SIZE];
-
-    bool fec_change = false;
 
     const uint8_t *fec_header = uref_block_peek(uref, RTP_HEADER_SIZE,
             sizeof(fec_buffer), fec_buffer);
@@ -648,35 +666,23 @@ static int upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
             upipe_rtp_fec->cols = offset;
             upipe_rtp_fec->rows = na;
 
-            fec_change = true;
             upipe_warn_va(upipe, "FEC detected %u rows and %u columns", upipe_rtp_fec->rows,
                     upipe_rtp_fec->cols);
+            clear_fec(upipe_rtp_fec_to_upipe(upipe_rtp_fec));
         }
+
         insert_ordered_uref(&upipe_rtp_fec->col_queue, uref);
-    } else if (upipe == upipe_rtp_fec_to_row_subpipe(upipe_rtp_fec)) {
-        if (!d) {
-            upipe_warn(upipe, "Invalid row FEC packet found, ignoring");
-            return -1;
-        }
-        insert_ordered_uref(&upipe_rtp_fec->row_queue, uref);
+
+        return 0;
     }
 
-    return fec_change;
-}
-
-/* Clear matrices if change of FEC */
-static void clear_fec(struct upipe *upipe)
-{
-    struct upipe_rtp_fec *upipe_rtp_fec = upipe_rtp_fec_from_upipe(upipe);
-
-    upipe_rtp_fec_clear(upipe_rtp_fec);
-
-    upipe_rtp_fec->first_seqnum = UINT32_MAX;
-    upipe_rtp_fec->last_seqnum = UINT32_MAX;
-    upipe_rtp_fec->latency = 0;
-
-    memset(upipe_rtp_fec->recent, 0xff, 2 * upipe_rtp_fec->rows *
-            upipe_rtp_fec->cols * sizeof(*upipe_rtp_fec->recent));
+    assert(upipe == upipe_rtp_fec_to_row_subpipe(upipe_rtp_fec));
+    if (!d) {
+        upipe_warn(upipe, "Invalid row FEC packet found, ignoring");
+        return -1;
+    }
+    insert_ordered_uref(&upipe_rtp_fec->row_queue, uref);
+    return 0;
 }
 
 /** @internal @This handles input uref.
@@ -710,10 +716,8 @@ static void upipe_rtp_fec_sub_input(struct upipe *upipe, struct uref *uref,
     }
     uref_block_peek_unmap(uref, 0, rtp_buffer, rtp_header);
 
-    bool fec_change = false;
-
     if (upipe == upipe_rtp_fec_to_main_subpipe(upipe_rtp_fec)) {
-        fec_change = upipe_rtp_fec_main_input(upipe, uref);
+        upipe_rtp_fec_main_input(upipe, uref);
         upipe_rtp_fec->pkts_since_last_fec++;
     } else {
         int ret = upipe_rtp_fec_colrow_input(upipe, uref);
@@ -721,22 +725,17 @@ static void upipe_rtp_fec_sub_input(struct upipe *upipe, struct uref *uref,
             uref_free(uref);
             return;
         }
-
         upipe_rtp_fec->pkts_since_last_fec = 0;
-        fec_change = ret;
     }
 
     /* Disable FEC if no FEC packets arrive for a while */
-    if (upipe_rtp_fec->pkts_since_last_fec > 200 &&
+    if (upipe_rtp_fec->pkts_since_last_fec > 200 && // FIXME : hardcoded value
        (upipe_rtp_fec->rows || upipe_rtp_fec->cols)) {
         upipe_rtp_fec->rows = 0;
         upipe_rtp_fec->cols = 0;
-        fec_change = true;
+        clear_fec(upipe_rtp_fec_to_upipe(upipe_rtp_fec));
         upipe_warn(upipe, "No FEC Packets received for a while, disabling FEC");
     }
-
-    if (fec_change)
-        clear_fec(upipe_rtp_fec_to_upipe(upipe_rtp_fec));
 }
 
 /** @internal @This processes control commands on an output subpipe of an
