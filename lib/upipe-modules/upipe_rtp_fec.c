@@ -292,33 +292,42 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         }
     }
 
-    if (length_rec != 7 * TS_SIZE + RTP_HEADER_SIZE)
+//    if (length_rec != 7 * TS_SIZE)
         upipe_warn_va(upipe_rtp_fec_to_upipe(upipe_rtp_fec),
-                "DUBIOUS REC LEN %i", length_rec);
+                "DUBIOUS REC LEN %i timestamp %u", length_rec, ts_rec);
 
     // FIXME: missing RTP header
     uref_block_resize(fec_uref, SMPTE_2022_FEC_HEADER_SIZE, -1);
     uint8_t *dst;
-    uref_block_write(fec_uref, 0, (int *)&length_rec, &dst);
+    int size = length_rec + RTP_HEADER_SIZE;
+    uref_block_write(fec_uref, 0, &size, &dst);
+
+    bool copy_header = true;
 
     ulist_foreach (&upipe_rtp_fec->main_queue, uchain) {
         struct uref *uref = uref_from_uchain(uchain);
-        size_t size = 0;
-
         for (int i = 0; i < items; i++) {
             if (seqnum_list[i] == uref->priv) {
+                size_t size = 0;
                 uref_block_size(uref, &size);
-                uint8_t payload_buf[TS_SIZE * 7]; // FIXME
-                const uint8_t *peek = uref_block_peek(uref, RTP_HEADER_SIZE, -1,
+                assert(size >= RTP_HEADER_SIZE);
+                uint8_t payload_buf[TS_SIZE * 7 + RTP_HEADER_SIZE];
+                assert(size <= sizeof(payload_buf)); // FIXME
+                // TODO: uref_block_read in a loop
+                const uint8_t *peek = uref_block_peek(uref, 0, size,
                         payload_buf);
-                for (int i = 0; i < size ; i++)
-                    dst[i] ^= peek[i];
+                if (copy_header) {
+                    memcpy(dst, peek, RTP_HEADER_SIZE);
+                    copy_header = false;
+                }
+                for (int i = 0; i < size - RTP_HEADER_SIZE; i++)
+                    dst[RTP_HEADER_SIZE + i] ^= peek[RTP_HEADER_SIZE + i];
                 uref_block_peek_unmap(uref, RTP_HEADER_SIZE, payload_buf, peek);
                 break;
             }
         }
 
-        if (items == 1)
+        if (items == 1) // ???
             break;
     }
 
@@ -331,9 +340,9 @@ static void upipe_rtp_fec_correct_packets(struct upipe *upipe,
         }
 
     upipe_warn_va(&upipe_rtp_fec->upipe, "Corrected packet. Sequence number: %u", missing_seqnum);
+    rtp_set_seqnum(dst, missing_seqnum);
+    rtp_set_timestamp(dst, ts_rec);
     uref_block_unmap(fec_uref, 0);
-    //uref_rtp_set_seqnum(fec_uref, missing_seqnum);
-    //uref_rtp_set_timestamp(fec_uref, ts_rec);
 
     insert_ordered_uref(&upipe_rtp_fec->main_queue, fec_uref);
 }
