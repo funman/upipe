@@ -31,7 +31,7 @@
 #include <bitstream/smpte/2022_1_fec.h>
 
 #define UPIPE_FEC_JITTER UCLOCK_FREQ/25
-#define FEC_MAX 50
+#define FEC_MAX 255
 
 /** upipe_rtp_fec structure with rtp-fec parameters */
 struct upipe_rtp_fec {
@@ -667,11 +667,7 @@ static void upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
             goto invalid;
         }
 
-        if (offset > FEC_MAX || na > FEC_MAX) {
-            upipe_err_va(upipe, "%ux%u matrix is too large (> %ux%u)",
-                    offset, na, FEC_MAX, FEC_MAX);
-            goto invalid;
-        } else if (upipe_rtp_fec->cols != offset) {
+        if (upipe_rtp_fec->cols != offset) {
             upipe_rtp_fec->cols = offset;
             upipe_rtp_fec->rows = na;
 
