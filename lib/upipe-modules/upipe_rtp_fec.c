@@ -636,7 +636,7 @@ out:
         clear_fec(super_pipe);
 }
 
-static int upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
+static void upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
 {
     struct upipe_rtp_fec *upipe_rtp_fec =
         upipe_rtp_fec_from_sub_mgr(upipe->mgr);
@@ -648,17 +648,21 @@ static int upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
     uint8_t d = smpte_fec_check_d(fec_header);
     uint8_t offset = smpte_fec_get_offset(fec_header);
     uint8_t na = smpte_fec_get_na(fec_header);
+    uint64_t snbase_low = smpte_fec_get_snbase_low(fec_header);
+    uref->priv |= (snbase_low << 32);
     uref_block_peek_unmap(uref, RTP_HEADER_SIZE, fec_buffer, fec_header);
 
     if (upipe == upipe_rtp_fec_to_col_subpipe(upipe_rtp_fec)) {
         if (d) {
             upipe_warn(upipe, "Invalid column FEC packet found, ignoring");
-            return -1;
+            uref_free(uref);
+            return;
         }
 
         if(!offset || !na) {
             upipe_warn(upipe, "Invalid row/column in FEC packet, ignoring");
-            return -1;
+            uref_free(uref);
+            return;
         }
 
         if (upipe_rtp_fec->cols != offset && upipe_rtp_fec->cols <= FEC_MAX &&
@@ -672,17 +676,19 @@ static int upipe_rtp_fec_colrow_input(struct upipe *upipe, struct uref *uref)
         }
 
         insert_ordered_uref(&upipe_rtp_fec->col_queue, uref);
-
-        return 0;
+        upipe_rtp_fec->pkts_since_last_fec = 0;
+        return;
     }
 
     assert(upipe == upipe_rtp_fec_to_row_subpipe(upipe_rtp_fec));
     if (!d) {
         upipe_warn(upipe, "Invalid row FEC packet found, ignoring");
-        return -1;
+        uref_free(uref);
+        return;
     }
+
     insert_ordered_uref(&upipe_rtp_fec->row_queue, uref);
-    return 0;
+    upipe_rtp_fec->pkts_since_last_fec = 0;
 }
 
 /** @internal @This handles input uref.
@@ -697,9 +703,7 @@ static void upipe_rtp_fec_sub_input(struct upipe *upipe, struct uref *uref,
     struct upipe_rtp_fec *upipe_rtp_fec =
         upipe_rtp_fec_from_sub_mgr(upipe->mgr);
 
-    /* extract seqnum and FEC snbase_low */
-
-    uint8_t rtp_buffer[RTP_HEADER_SIZE + SMPTE_2022_FEC_HEADER_SIZE];
+    uint8_t rtp_buffer[RTP_HEADER_SIZE];
     const uint8_t *rtp_header = uref_block_peek(uref, 0, sizeof(rtp_buffer),
             rtp_buffer);
     if (unlikely(rtp_header == NULL)) {
@@ -709,28 +713,18 @@ static void upipe_rtp_fec_sub_input(struct upipe *upipe, struct uref *uref,
     }
 
     uref->priv = rtp_get_seqnum(rtp_header);
-    if (upipe != upipe_rtp_fec_to_main_subpipe(upipe_rtp_fec)) {
-        uint64_t snbase_low = smpte_fec_get_snbase_low(
-                &rtp_header[RTP_HEADER_SIZE]);
-        uref->priv |= (snbase_low << 32);
-    }
     uref_block_peek_unmap(uref, 0, rtp_buffer, rtp_header);
 
-    if (upipe == upipe_rtp_fec_to_main_subpipe(upipe_rtp_fec)) {
-        upipe_rtp_fec_main_input(upipe, uref);
-        upipe_rtp_fec->pkts_since_last_fec++;
-    } else {
-        int ret = upipe_rtp_fec_colrow_input(upipe, uref);
-        if (ret < 0) {
-            uref_free(uref);
-            return;
-        }
-        upipe_rtp_fec->pkts_since_last_fec = 0;
+    if (upipe != upipe_rtp_fec_to_main_subpipe(upipe_rtp_fec)) {
+        upipe_rtp_fec_colrow_input(upipe, uref);
+        return;
     }
 
+    upipe_rtp_fec_main_input(upipe, uref);
+
     /* Disable FEC if no FEC packets arrive for a while */
-    if (upipe_rtp_fec->pkts_since_last_fec > 200 && // FIXME : hardcoded value
-       (upipe_rtp_fec->rows || upipe_rtp_fec->cols)) {
+    if (++upipe_rtp_fec->pkts_since_last_fec > 200 && // FIXME : hardcoded value
+            (upipe_rtp_fec->rows || upipe_rtp_fec->cols)) {
         upipe_rtp_fec->rows = 0;
         upipe_rtp_fec->cols = 0;
         clear_fec(upipe_rtp_fec_to_upipe(upipe_rtp_fec));
