@@ -431,7 +431,7 @@ static void upipe_rtp_fec_timer(struct upump *upump)
     struct uchain *uchain, *uchain_tmp;
     ulist_delete_foreach (&upipe_rtp_fec->main_queue, uchain, uchain_tmp) {
         struct uref *uref = uref_from_uchain(uchain);
-        uint64_t date_sys;
+        uint64_t date_sys = UINT64_MAX;
         int type;
         uref_clock_get_date_sys(uref, &date_sys, &type);
         uint64_t seqnum = uref->priv;
@@ -441,7 +441,7 @@ static void upipe_rtp_fec_timer(struct upump *upump)
             date_sys += upipe_rtp_fec->latency;
 
             if (now < date_sys)
-                return;
+                break;
 
             uref_clock_set_date_sys(uref, date_sys, type);
         }
