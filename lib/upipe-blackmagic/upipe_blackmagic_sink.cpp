@@ -1176,7 +1176,7 @@ static int upipe_bmd_sink_sub_set_flow_def(struct upipe *upipe,
         }
 
         upipe_bmd_sink->frame_idx = 0;
-    } else {
+    } else if (upipe_bmd_sink_sub != &upipe_bmd_sink->subpic_subpipe) {
         if (!ubase_check(uref_sound_flow_get_channels(flow_def, &upipe_bmd_sink_sub->channels))) {
             upipe_err(upipe, "Could not read number of channels");
             return UBASE_ERR_INVALID;
