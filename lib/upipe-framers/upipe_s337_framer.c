@@ -231,6 +231,18 @@ static void upipe_s337f_input(struct upipe *upipe, struct uref *uref, struct upu
             upipe_verbose(upipe, "Frame too small");
         }
 
+        if (out_size > size[1] - upipe_s337f->samples) {
+            upipe_warn_va(upipe, "Too large frame, dropping buffered uref");
+            uref_sound_unmap(uref, 0, sync, 1);
+            uref_sound_unmap(output, 0, -1, 1);
+            uref_free(output);
+
+            upipe_s337f->uref = NULL;
+            upipe_s337f->samples = 0;
+            uref_free(uref);
+            return;
+        }
+
         if (out_size > sync) {
             upipe_verbose(upipe, "Frame too big, padding");
             size_t padding = size[1] - out_size - upipe_s337f->samples;
