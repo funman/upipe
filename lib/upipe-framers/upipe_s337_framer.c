@@ -233,7 +233,7 @@ static void upipe_s337f_input(struct upipe *upipe, struct uref *uref, struct upu
 
         if (out_size > sync) {
             upipe_verbose(upipe, "Frame too big, padding");
-            size_t padding = out_size - sync;
+            size_t padding = size[1] - out_size - upipe_s337f->samples;
             if (upipe_s337f->bits == 16) {
                 memset(&out16[2*(upipe_s337f->samples + out_size)], 0, 2 * padding);
             } else {
