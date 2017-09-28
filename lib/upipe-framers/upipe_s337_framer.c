@@ -162,7 +162,7 @@ static void upipe_s337f_input(struct upipe *upipe, struct uref *uref, struct upu
     struct upipe_s337f *upipe_s337f = upipe_s337f_from_upipe(upipe);
     struct uref *output = upipe_s337f->uref;
 
-    ssize_t sync = upipe_s337f_sync(upipe, uref);
+    const ssize_t sync = upipe_s337f_sync(upipe, uref);
 
     if (sync == -1) {
         if (output) {
