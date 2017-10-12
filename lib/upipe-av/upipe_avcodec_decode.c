@@ -289,12 +289,12 @@ static int upipe_avcdec_get_buffer_pic(struct AVCodecContext *context,
     UBASE_FATAL(upipe, uref_pic_flow_set_vsize(flow_def_attr, context->height))
     UBASE_FATAL(upipe, uref_pic_flow_set_hsize_visible(flow_def_attr, context->width))
     UBASE_FATAL(upipe, uref_pic_flow_set_vsize_visible(flow_def_attr, context->height))
-    if (context->framerate.num && context->framerate.den) {
-
-        struct urational fps = {
-            .num = context->framerate.num,
-            .den = context->framerate.den
-        };
+    struct urational fps;
+    if (!ubase_check(uref_pic_flow_get_fps(upipe_avcdec->flow_def_input, &fps))) {
+        fps.num = context->framerate.num;
+        fps.den = context->framerate.den;
+    }
+    if (fps.num && fps.den) {
         urational_simplify(&fps);
         UBASE_FATAL(upipe, uref_pic_flow_set_fps(flow_def_attr, fps))
 
@@ -1529,22 +1529,14 @@ static int upipe_avcdec_control(struct upipe *upipe, int command, va_list args)
             upipe_avcdec_abort_av_deal(upipe);
             return upipe_avcdec_attach_upump_mgr(upipe);
 
-        case UPIPE_GET_FLOW_DEF: {
-            struct uref **p = va_arg(args, struct uref **);
-            return upipe_avcdec_get_flow_def(upipe, p);
-        }
         case UPIPE_SET_FLOW_DEF: {
             struct uref *flow_def = va_arg(args, struct uref *);
             return upipe_avcdec_set_flow_def(upipe, flow_def);
         }
-        case UPIPE_GET_OUTPUT: {
-            struct upipe **p = va_arg(args, struct upipe **);
-            return upipe_avcdec_get_output(upipe, p);
-        }
-        case UPIPE_SET_OUTPUT: {
-            struct upipe *output = va_arg(args, struct upipe *);
-            return upipe_avcdec_set_output(upipe, output);
-        }
+        case UPIPE_GET_FLOW_DEF:
+        case UPIPE_GET_OUTPUT:
+        case UPIPE_SET_OUTPUT:
+            return upipe_avcdec_control_output(upipe, command, args);
 
         case UPIPE_SET_OPTION: {
             const char *option = va_arg(args, const char *);
