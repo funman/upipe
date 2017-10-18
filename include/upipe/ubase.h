@@ -67,6 +67,8 @@ extern "C" {
 /** @This marks a function or variable as deprecated (forces compiler
  * warnings). */
 #define UBASE_DEPRECATED __attribute__ ((deprecated))
+/** @This marks a function as taking printf style arguments */
+#define UBASE_FMT_PRINTF(idx,first) __attribute__ ((format(printf,idx,first)))
 
 #else /* mkdoc:skip */
 #define likely(x)       !!(x)
@@ -506,6 +508,19 @@ static inline uint32_t ubase_get_signature(va_list args)
     va_end(args_copy);
     return signature;
 }
+
+/** @This clips an integer into the given range
+ *
+ * @param args the va list to copy from
+ * @return a signature
+ */
+static inline int ubase_clip(int i, int min, int max)
+{
+    if      (i < min) return min;
+    else if (i > max) return max;
+    else               return i;
+}
+
 
 #ifdef __cplusplus
 }
