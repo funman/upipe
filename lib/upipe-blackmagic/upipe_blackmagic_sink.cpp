@@ -425,8 +425,9 @@ static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
         const uint8_t *pic_data, size_t pic_data_size, int w, int sd,
         vbi_sampling_par *sp, uint16_t *ctr_array)
 {
-    const uint8_t *packet[2][5] = {0};
-    int packets[2] = {0};
+    const uint8_t *packet[2][5];
+    int packets[2] = {0, 0};
+    memset(packet, 0, sizeof(packet));
 
     if (pic_data[0] != DVBVBI_DATA_IDENTIFIER)
         return;
@@ -451,7 +452,7 @@ static void upipe_bmd_sink_extract_ttx(IDeckLinkVideoFrameAncillary *ancillary,
         if (f2 == 0 && line_offset == 0) // line == 0
             continue;
 
-        if (packets[f2] < sd ? 5 : 1)
+        if (packets[f2] < (sd ? 5 : 1))
             packet[f2][packets[f2]++] = pic_data;
     }
 
@@ -571,7 +572,7 @@ static void copy_samples(upipe_bmd_sink_sub *upipe_bmd_sink_sub,
     if (upipe_bmd_sink_sub->dolby_e) {
         if (upipe_bmd_sink->dolbye_offset >= samples) {
             upipe_err_va(upipe, "offsetting for dolbye would overflow audio: "
-                "dolbye %hu, %" PRIu64" samples",
+                "dolbye %hhu, %" PRIu64" samples",
                 upipe_bmd_sink->dolbye_offset, samples);
         } else {
             offset   = upipe_bmd_sink->dolbye_offset;
@@ -671,7 +672,7 @@ static upipe_bmd_sink_frame *get_video_frame(struct upipe *upipe,
 
         /* increase refcount before outputting this frame */
         ULONG ref = upipe_bmd_sink->video_frame->AddRef();
-        upipe_dbg_va(upipe, "REUSING FRAME %p : %d", upipe_bmd_sink->video_frame, ref);
+        upipe_dbg_va(upipe, "REUSING FRAME %p : %lu", upipe_bmd_sink->video_frame, ref);
         return upipe_bmd_sink->video_frame;
     }
 
@@ -818,7 +819,7 @@ static void schedule_frame(struct upipe *upipe, struct uref *uref, uint64_t pts)
             upipe_bmd_sink->audio_buf, samples, pts,
             UCLOCK_FREQ, &written);
     if( result != S_OK ) {
-        upipe_err_va(upipe, "DROPPED AUDIO: %lx", result);
+        upipe_err_va(upipe, "DROPPED AUDIO: %x", result);
         written = 0;
     }
     if (written != samples)
@@ -1224,6 +1225,7 @@ static int upipe_bmd_sink_sub_control(struct upipe *upipe,
         case UPIPE_SUB_GET_SUPER: {
             struct upipe **p = va_arg(args, struct upipe **);
             *p = upipe_bmd_sink_to_upipe(upipe_bmd_sink_from_sub_mgr(upipe->mgr));
+            return UBASE_ERR_NONE;
         }
 
         default:
@@ -1259,7 +1261,7 @@ static struct upipe *upipe_bmd_sink_sub_alloc(struct upipe_mgr *mgr,
     }
 
     if (channel_idx >= DECKLINK_CHANNELS) {
-        upipe_err_va(upipe, "channel_idx %hu not in range", channel_idx);
+        upipe_err_va(upipe, "channel_idx %hhu not in range", channel_idx);
         goto error;
     }
 
@@ -1317,7 +1319,7 @@ static uint64_t uclock_bmd_sink_now(struct uclock *uclock)
     HRESULT res = upipe_bmd_sink->deckLinkOutput->GetHardwareReferenceClock(
             UCLOCK_FREQ, &hardware_time, &time_in_frame, &ticks_per_frame);
     if (res != S_OK) {
-        upipe_err_va(upipe, "\t\tCouldn't read hardware clock: 0x%08lx", res);
+        upipe_err_va(upipe, "\t\tCouldn't read hardware clock: 0x%08x", res);
         hardware_time = 0;
     }
 
