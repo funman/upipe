@@ -206,7 +206,7 @@ static struct upipe *upipe_dvbcsa_dec_alloc(struct upipe_mgr *mgr,
         if (!ubase_check(uref_clock_get_latency(flow_def, &latency)))
             latency = 0;
         upipe_dvbcsa_dec->bs = true;
-        upipe_dvbcsa_set_max_latency(upipe, latency);
+        upipe_dvbcsa_common_set_max_latency(&upipe_dvbcsa_dec->common, latency);
     } else {
         upipe_dvbcsa_dec->bs = false;
     }

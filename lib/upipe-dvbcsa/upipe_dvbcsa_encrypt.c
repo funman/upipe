@@ -217,7 +217,7 @@ static struct upipe *upipe_dvbcsa_enc_alloc(struct upipe_mgr *mgr,
         if (!ubase_check(uref_clock_get_latency(flow_def, &latency)))
             latency = 0;
         upipe_dvbcsa_enc->mode = CSA_BS;
-        upipe_dvbcsa_set_max_latency(upipe, latency);
+        upipe_dvbcsa_common_set_max_latency(&upipe_dvbcsa_enc->common, latency);
     } else {
         upipe_dvbcsa_enc->mode = CSA;
     }
@@ -544,7 +544,6 @@ static int upipe_dvbcsa_enc_control_real(struct upipe *upipe,
 
         case UPIPE_DVBCSA_ADD_PID:
         case UPIPE_DVBCSA_DEL_PID:
-        case UPIPE_DVBCSA_SET_MAX_LATENCY:
             return upipe_dvbcsa_common_control(common, cmd, args);
     }
     return UBASE_ERR_UNHANDLED;
