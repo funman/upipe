@@ -562,6 +562,7 @@ static int upipe_dvbcsa_enc_control(struct upipe *upipe,
     return upipe_dvbcsa_enc_check(upipe, NULL);
 }
 
+/** @internal @This is the management structure for dvbcsa encription pipes. */
 static struct upipe_mgr upipe_dvbcsa_enc_mgr = {
     .signature = UPIPE_DVBCSA_ENC_SIGNATURE,
     .refcount = NULL,
@@ -570,6 +571,10 @@ static struct upipe_mgr upipe_dvbcsa_enc_mgr = {
     .upipe_control = upipe_dvbcsa_enc_control,
 };
 
+/** @This returns the dvbcsa encrypt pipe management structure.
+ *
+ * @return a pointer to the manager
+ */
 struct upipe_mgr *upipe_dvbcsa_enc_mgr_alloc(void)
 {
     return &upipe_dvbcsa_enc_mgr;
