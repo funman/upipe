@@ -9,6 +9,7 @@ libupipe_ts_la_SOURCES = \
 	upipe_ts_nit_decoder.c \
 	upipe_ts_cat_decoder.c \
 	upipe_ts_emm_decoder.c \
+	upipe_ts_ecm_decoder.c \
 	upipe_ts_pes_decaps.c \
 	upipe_ts_pat_decoder.c \
 	upipe_ts_pmt_decoder.c \
