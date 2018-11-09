@@ -251,13 +251,6 @@ struct upipe_ts_demux {
     /** pointer to ts_emmd inner pipe */
     struct upipe *emmd;
 
-    /** psi_pid structure for ECM */
-    struct upipe_ts_demux_psi_pid *psi_pid_ecm;
-    /** ts_psi_split_output inner pipe for ECM */
-    struct upipe *psi_split_output_ecm;
-    /** pointer to ts_ecmd inner pipe */
-    struct upipe *ecmd;
-
     /** psi_pid structure for NIT */
     struct upipe_ts_demux_psi_pid *psi_pid_nit;
     /** ts_psi_split_output inner pipe for NIT */
@@ -300,8 +293,6 @@ struct upipe_ts_demux {
     struct uprobe catd_probe;
     /** probe to get events from ts_emmd inner pipe */
     struct uprobe emmd_probe;
-    /** probe to get events from ts_ecmd inner pipe */
-    struct uprobe ecmd_probe;
     /** probe to get events from ts_nitd inner pipe */
     struct uprobe nitd_probe;
     /** probe to get events from ts_sdtd inner pipe */
@@ -387,6 +378,13 @@ struct upipe_ts_demux_program {
     /** pointer to optional ts_eitd inner pipe for EITs */
     struct upipe *eitsd[EITS_TABLEIDS];
 
+    /** psi_pid structure for ECM */
+    struct upipe_ts_demux_psi_pid *psi_pid_ecm;
+    /** ts_psi_split_output inner pipe for ECM */
+    struct upipe *psi_split_output_ecm;
+    /** pointer to ts_ecmd inner pipe */
+    struct upipe *ecmd;
+
     /** PMT PID */
     uint64_t pmt_pid;
     /** PCR PID */
@@ -409,6 +407,8 @@ struct upipe_ts_demux_program {
     struct uprobe pcr_probe;
     /** probe to proxify events from other pipes */
     struct uprobe proxy_probe;
+    /** probe to get events from ts_ecmd inner pipe */
+    struct uprobe ecmd_probe;
 
     /** list of outputs */
     struct uchain outputs;
@@ -1240,6 +1240,90 @@ static void upipe_ts_demux_program_build_flow_def(struct upipe *upipe)
     upipe_ts_demux_program_output(upipe, uref, NULL);
 }
 
+/** @internal @This configures the pipes to decode ECM (or not).
+ *
+ * @param upipe description structure of the pipe
+ * @param flow_def PMTd flow definition
+ * @return an error code
+ */
+static int upipe_ts_demux_configure_ecm(struct upipe *upipe,
+                                        struct uref *flow_def)
+{
+    struct upipe_ts_demux_program *upipe_ts_demux_program =
+        upipe_ts_demux_program_from_upipe(upipe);
+    struct upipe_ts_demux *demux = upipe_ts_demux_from_program_mgr(upipe->mgr);
+    struct upipe_ts_demux_mgr *ts_demux_mgr =
+        upipe_ts_demux_mgr_from_upipe_mgr(upipe_ts_demux_to_upipe(demux)->mgr);
+
+    uint64_t ecm_pid;
+    if (!ubase_check(uref_ts_flow_get_capid(flow_def, &ecm_pid))) {
+        if (upipe_ts_demux_program->psi_split_output_ecm != NULL) {
+            upipe_release(upipe_ts_demux_program->psi_split_output_ecm);
+            upipe_ts_demux_psi_pid_release(upipe_ts_demux_program->psi_pid_ecm);
+            upipe_ts_demux_program->psi_split_output_ecm = NULL;
+        }
+        upipe_release(upipe_ts_demux_program->ecmd);
+        upipe_ts_demux_program->ecmd = NULL;
+        return UBASE_ERR_NONE;
+    }
+
+    if (upipe_ts_demux_program->ecmd != NULL)
+        return UBASE_ERR_NONE;
+
+    /* get psi_split inner pipe */
+    upipe_ts_demux_program->psi_pid_ecm =
+        upipe_ts_demux_psi_pid_use(upipe_ts_demux_to_upipe(demux), ecm_pid);
+    if (unlikely(upipe_ts_demux_program->psi_pid_ecm == NULL)) {
+        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+        return UBASE_ERR_ALLOC;
+    }
+
+    /* set filter on table 0x80, current */
+    uint8_t filter[PSI_HEADER_SIZE_SYNTAX1];
+    uint8_t mask[PSI_HEADER_SIZE_SYNTAX1];
+    memset(filter, 0, PSI_HEADER_SIZE_SYNTAX1);
+    memset(mask, 0, PSI_HEADER_SIZE_SYNTAX1);
+    psi_set_syntax(filter);
+    psi_set_syntax(mask);
+    psi_set_tableid(filter, 0x80);
+    psi_set_tableid(mask, 0xff);
+    psi_set_current(filter);
+    psi_set_current(mask);
+    flow_def = uref_alloc_control(demux->uref_mgr);
+    if (unlikely(flow_def == NULL ||
+                 !ubase_check(uref_flow_set_def(flow_def, "block.mpegtspsi.mpegtsecm.")) ||
+                 !ubase_check(uref_ts_flow_set_psi_filter(flow_def, filter, mask,
+                                              PSI_HEADER_SIZE_SYNTAX1)) ||
+                 !ubase_check(uref_ts_flow_set_pid(flow_def, EIT_PID)) ||
+                 (upipe_ts_demux_program->psi_split_output_ecm =
+                      upipe_flow_alloc_sub(
+                          upipe_ts_demux_program->psi_pid_ecm->psi_split,
+                          uprobe_pfx_alloc(
+                              uprobe_use(&upipe_ts_demux_program->proxy_probe),
+                              UPROBE_LOG_VERBOSE, "psi_split output ecm"),
+                          flow_def)) == NULL)) {
+        if (flow_def != NULL)
+            uref_free(flow_def);
+        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+        return UBASE_ERR_ALLOC;
+    }
+    uref_free(flow_def);
+
+    /* allocate EIT decoder */
+    upipe_ts_demux_program->ecmd =
+        upipe_void_alloc_output(upipe_ts_demux_program->psi_split_output_ecm,
+                   ts_demux_mgr->ts_ecmd_mgr,
+                   uprobe_pfx_alloc(
+                       uprobe_use(&upipe_ts_demux_program->ecmd_probe),
+                       UPROBE_LOG_VERBOSE, "ecmd"));
+    if (unlikely(upipe_ts_demux_program->ecmd == NULL)) {
+        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+        return UBASE_ERR_ALLOC;
+    }
+
+    return UBASE_ERR_NONE;
+}
+
 /** @internal @This configures the pipes to decode EITp/f (or not).
  *
  * @param upipe description structure of the pipe
@@ -1487,6 +1571,8 @@ static int upipe_ts_demux_program_pmtd_new_flow_def(
         upipe_ts_demux_program_check_pcr(upipe);
     }
 
+    upipe_ts_demux_program_build_flow_def(upipe);
+
     const uint8_t *desc = NULL;
     size_t len = 0;
     bool dvb_cissa = false;
@@ -1544,59 +1630,8 @@ static int upipe_ts_demux_program_pmtd_new_flow_def(
     }
 
     if (sysid == 0x2610 && dvb_cissa) {
-        struct upipe_ts_demux *upipe_ts_demux = upipe_ts_demux_from_program_mgr(upipe->mgr);
-        struct upipe *u = upipe_ts_demux_to_upipe(upipe_ts_demux);
-        /* decode ECM */
-        uint64_t ecm_pid;
-        uref_ts_flow_get_capid(flow_def, &ecm_pid);
-
-        if (upipe_ts_demux->psi_pid_ecm != NULL)
-            upipe_ts_demux_psi_pid_release(upipe_ts_demux->psi_pid_ecm);
-        upipe_ts_demux->psi_pid_ecm = upipe_ts_demux_psi_pid_use(u,
-                ecm_pid);
-
-        struct upipe_ts_demux_mgr *ts_demux_mgr =
-            upipe_ts_demux_mgr_from_upipe_mgr(u->mgr);
-
-        /* set filter on table 0, current */
-        uint8_t filter[PSI_HEADER_SIZE_SYNTAX1];
-        uint8_t mask[PSI_HEADER_SIZE_SYNTAX1];
-        memset(filter, 0, PSI_HEADER_SIZE_SYNTAX1);
-        memset(mask, 0, PSI_HEADER_SIZE_SYNTAX1);
-        psi_set_syntax(filter);
-        psi_set_syntax(mask);
-        psi_set_tableid(filter, 0x80);
-        psi_set_tableid(mask, 0xff);
-        psi_set_current(filter);
-        psi_set_current(mask);
-        flow_def = uref_alloc_control(upipe_ts_demux->uref_mgr);
-        if (unlikely(flow_def == NULL ||
-                    !ubase_check(uref_flow_set_def(flow_def,
-                            "block.mpegtspsi.mpegtsecm.")) ||
-                    !ubase_check(uref_ts_flow_set_psi_filter(flow_def,
-                            filter, mask, PSI_HEADER_SIZE_SYNTAX1)) ||
-                    !ubase_check(uref_ts_flow_set_pid(flow_def, ecm_pid)) ||
-                    (upipe_ts_demux->psi_split_output_ecm =
-                     upipe_flow_alloc_sub(
-                         upipe_ts_demux->psi_pid_ecm->psi_split,
-                         uprobe_pfx_alloc(
-                             uprobe_use(&upipe_ts_demux->proxy_probe),
-                             UPROBE_LOG_VERBOSE, "psi_split output ecm"),
-                         flow_def)) == NULL ||
-                    (upipe_ts_demux->ecmd =
-                     upipe_void_alloc_output(upipe_ts_demux->psi_split_output_ecm,
-                         ts_demux_mgr->ts_ecmd_mgr,
-                         uprobe_pfx_alloc(uprobe_use(&upipe_ts_demux->ecmd_probe),
-                             UPROBE_LOG_VERBOSE, "ecmd"))) == NULL)) {
-            uref_free(flow_def);
-            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
-            return UBASE_ERR_ALLOC;
-        }
-        uref_free(flow_def);
-
+        UBASE_RETURN(upipe_ts_demux_configure_ecm(upipe, flow_def));
     }
-
-    upipe_ts_demux_program_build_flow_def(upipe);
 
     UBASE_RETURN(upipe_ts_demux_configure_eit(upipe, flow_def));
 
@@ -1910,6 +1945,34 @@ static void upipe_ts_demux_program_check_pcr(struct upipe *upipe)
     upipe_release(decaps);
 }
 
+/** @internal @This catches events coming from ecmd inner pipe.
+ *
+ * @param uprobe pointer to the probe in upipe_ts_demux
+ * @param ecmd pointer to the inner pipe
+ * @param event event triggered by the inner pipe
+ * @param args arguments of the event
+ * @return an error code
+ */
+static int upipe_ts_demux_program_ecmd_probe(struct uprobe *uprobe,
+                                     struct upipe *ecmd,
+                                     int event, va_list args)
+{
+    struct upipe_ts_demux_program *upipe_ts_demux_program =
+        container_of(uprobe, struct upipe_ts_demux_program, ecmd_probe);
+    struct upipe *upipe = upipe_ts_demux_program_to_upipe(upipe_ts_demux_program);
+
+    switch (event) {
+        case UPROBE_NEED_OUTPUT:
+            return UBASE_ERR_NONE;
+        case UPROBE_NEW_FLOW_DEF: {
+         struct uref *flow_def = va_arg(args, struct uref *);
+            return UBASE_ERR_NONE;
+        }
+        default:
+            return upipe_throw_proxy(upipe, ecmd, event, args);
+    }
+}
+
 /** @internal @This allocates a program subpipe of a ts_demux pipe.
  *
  * @param mgr common management structure
@@ -1942,9 +2005,14 @@ static struct upipe *upipe_ts_demux_program_alloc(struct upipe_mgr *mgr,
     upipe_ts_demux_program->pcr_pid = 0;
     upipe_ts_demux_program->pcr_split_output = NULL;
     upipe_ts_demux_program->psi_pid_pmt =
-        upipe_ts_demux_program->psi_pid_eit = NULL;
+        upipe_ts_demux_program->psi_pid_eit =
+        upipe_ts_demux_program->psi_pid_ecm = NULL;
     upipe_ts_demux_program->psi_split_output_pmt =
-        upipe_ts_demux_program->psi_split_output_eit = NULL;
+        upipe_ts_demux_program->psi_split_output_eit =
+        upipe_ts_demux_program->psi_split_output_ecm = NULL;
+
+    upipe_ts_demux_program->ecmd = NULL;
+
     upipe_ts_demux_program->pmtd = upipe_ts_demux_program->eitd = NULL;
     upipe_ts_demux_program->setflowdef = NULL;
     for (uint8_t n = 0; n < EITS_TABLEIDS; n++) {
@@ -1970,6 +2038,10 @@ static struct upipe *upipe_ts_demux_program_alloc(struct upipe_mgr *mgr,
     uprobe_init(&upipe_ts_demux_program->proxy_probe,
                 upipe_ts_demux_program_proxy_probe, NULL);
     upipe_ts_demux_program->proxy_probe.refcount =
+        upipe_ts_demux_program_to_urefcount_real(upipe_ts_demux_program);
+    uprobe_init(&upipe_ts_demux_program->ecmd_probe,
+            upipe_ts_demux_program_ecmd_probe, NULL);
+    upipe_ts_demux_program->ecmd_probe.refcount =
         upipe_ts_demux_program_to_urefcount_real(upipe_ts_demux_program);
 
     upipe_ts_demux_program_init_sub(upipe);
@@ -2120,6 +2192,8 @@ static void upipe_ts_demux_program_free(struct urefcount *urefcount_real)
     uprobe_clean(&upipe_ts_demux_program->eitd_probe);
     uprobe_clean(&upipe_ts_demux_program->pcr_probe);
     uprobe_clean(&upipe_ts_demux_program->proxy_probe);
+    uprobe_clean(&upipe_ts_demux_program->ecmd_probe);
+
     urefcount_clean(urefcount_real);
     upipe_ts_demux_program_clean_sub_outputs(upipe);
     if (upipe_ts_demux_program->flow_def_input != NULL)
@@ -2156,6 +2230,14 @@ static void upipe_ts_demux_program_no_input(struct upipe *upipe)
     }
     upipe_release(upipe_ts_demux_program->eitd);
     upipe_ts_demux_program->eitd = NULL;
+
+    if (upipe_ts_demux_program->psi_split_output_ecm != NULL) {
+        upipe_release(upipe_ts_demux_program->psi_split_output_ecm);
+        upipe_ts_demux_psi_pid_release(upipe_ts_demux_program->psi_pid_ecm);
+        upipe_ts_demux_program->psi_split_output_ecm = NULL;
+    }
+    upipe_release(upipe_ts_demux_program->ecmd);
+    upipe_ts_demux_program->ecmd = NULL;
 
     for (uint8_t n = 0; n < EITS_TABLEIDS; n++) {
         if (upipe_ts_demux_program->psi_split_output_eits[n] != NULL) {
@@ -2933,35 +3015,6 @@ static int upipe_ts_demux_emmd_probe(struct uprobe *uprobe,
     }
 }
 
-/** @internal @This catches events coming from ecmd inner pipe.
- *
- * @param uprobe pointer to the probe in upipe_ts_demux
- * @param ecmd pointer to the inner pipe
- * @param event event triggered by the inner pipe
- * @param args arguments of the event
- * @return an error code
- */
-static int upipe_ts_demux_ecmd_probe(struct uprobe *uprobe,
-                                     struct upipe *ecmd,
-                                     int event, va_list args)
-{
-    struct upipe_ts_demux *upipe_ts_demux =
-        container_of(uprobe, struct upipe_ts_demux, ecmd_probe);
-    struct upipe *upipe = upipe_ts_demux_to_upipe(upipe_ts_demux);
-
-    switch (event) {
-        case UPROBE_NEW_FLOW_DEF: {
-            struct uref *flow_def = va_arg(args, struct uref *);
-            // XXX
-            return UBASE_ERR_NONE;
-        }
-        case UPROBE_NEED_OUTPUT:
-            return UBASE_ERR_NONE;
-        default:
-            return upipe_throw_proxy(upipe, ecmd, event, args);
-    }
-}
-
 /** @internal @This catches events coming from nitd inner pipe.
  *
  * @param uprobe pointer to the probe in upipe_ts_demux
@@ -3121,11 +3174,9 @@ static struct upipe *upipe_ts_demux_alloc(struct upipe_mgr *mgr,
     upipe_ts_demux->psi_split_output_tdt = upipe_ts_demux->tdtd = NULL;
     upipe_ts_demux->psi_split_output_cat = upipe_ts_demux->catd = NULL;
     upipe_ts_demux->psi_split_output_emm = upipe_ts_demux->emmd = NULL;
-    upipe_ts_demux->psi_split_output_ecm = upipe_ts_demux->ecmd = NULL;
     upipe_ts_demux->psi_pid_pat = upipe_ts_demux->psi_pid_nit =
         upipe_ts_demux->psi_pid_sdt = upipe_ts_demux->psi_pid_tdt =
-        upipe_ts_demux->psi_pid_cat = upipe_ts_demux->psi_pid_emm =
-        upipe_ts_demux->psi_pid_ecm = NULL;
+        upipe_ts_demux->psi_pid_cat = upipe_ts_demux->psi_pid_emm = NULL;
     ulist_init(&upipe_ts_demux->pat_programs);
     ulist_init(&upipe_ts_demux->cat_bissca_entitlements);
 
@@ -3150,9 +3201,6 @@ static struct upipe *upipe_ts_demux_alloc(struct upipe_mgr *mgr,
         upipe_ts_demux_to_urefcount_real(upipe_ts_demux);
     uprobe_init(&upipe_ts_demux->emmd_probe, upipe_ts_demux_emmd_probe, NULL);
     upipe_ts_demux->emmd_probe.refcount =
-        upipe_ts_demux_to_urefcount_real(upipe_ts_demux);
-    uprobe_init(&upipe_ts_demux->ecmd_probe, upipe_ts_demux_ecmd_probe, NULL);
-    upipe_ts_demux->ecmd_probe.refcount =
         upipe_ts_demux_to_urefcount_real(upipe_ts_demux);
     uprobe_init(&upipe_ts_demux->nitd_probe, upipe_ts_demux_nitd_probe, NULL);
     upipe_ts_demux->nitd_probe.refcount =
@@ -3531,18 +3579,6 @@ static void upipe_ts_demux_no_input(struct upipe *upipe)
     }
     upipe_release(upipe_ts_demux->emmd);
     upipe_ts_demux->emmd = NULL;
-
-    /* close ECM */
-    if (upipe_ts_demux->psi_split_output_ecm != NULL) {
-        upipe_release(upipe_ts_demux->psi_split_output_ecm);
-        upipe_ts_demux->psi_split_output_ecm = NULL;
-    }
-    if (upipe_ts_demux->psi_pid_ecm != NULL) {
-        upipe_ts_demux_psi_pid_release(upipe_ts_demux->psi_pid_ecm);
-        upipe_ts_demux->psi_pid_ecm = NULL;
-    }
-    upipe_release(upipe_ts_demux->ecmd);
-    upipe_ts_demux->ecmd = NULL;
 
     /* close NIT */
     if (upipe_ts_demux->psi_split_output_nit != NULL) {
