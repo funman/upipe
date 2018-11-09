@@ -1400,6 +1400,52 @@ static int upipe_ts_demux_configure_eits(struct upipe *upipe,
     return UBASE_ERR_NONE;
 }
 
+/** @internal @This is a helper function to parse biss-ca descriptors and import
+ * the relevant ones into flow definition.
+ *
+ * @param upipe description structure of the pipe
+ * @param flow_def flow definition packet to fill in
+ * @param descl pointer to descriptor list
+ * @param desclength length of the descriptor list
+ * @return an error code
+ */
+static void upipe_ts_catd_parse_bissca_descs(struct upipe *upipe,
+                                      struct uref *flow_def,
+                                      const uint8_t *descl, uint16_t desclength)
+{
+    const uint8_t *desc;
+    int j = 0;
+    uint8_t esid_n = 0;
+    /* cast needed because biTStream expects an uint8_t * (but doesn't write
+     * to it */
+    while ((desc = descl_get_desc((uint8_t *)descl, desclength, j++)) != NULL) {
+        bool valid = true;
+        uint16_t length;
+        switch (desc_get_tag(desc)) {
+            case 0x80: /* BISS-CA entitlement session descriptor */
+                length = desc_get_length(desc);
+                for (int i = 0; i < length; i += 4) {
+                    uint16_t esid = (desc[DESC_HEADER_SIZE + i + 0] << 8) |
+                        desc[DESC_HEADER_SIZE + i + 1];
+                    uint16_t onid = (desc[DESC_HEADER_SIZE + i + 2] << 8) |
+                        desc[DESC_HEADER_SIZE + i + 3];
+
+                    uref_ts_flow_set_cat_onid(flow_def, onid, esid_n);
+                    uref_ts_flow_set_cat_esid(flow_def, esid, esid_n);
+                    esid_n++;
+                }
+                break;
+            default:
+                break;
+        }
+
+        if (!valid)
+            upipe_warn_va(upipe, "invalid descriptor 0x%x", desc_get_tag(desc));
+    }
+
+    uref_ts_flow_set_cat_esid_n(flow_def, esid_n);
+}
+
 /** @internal @This catches new_flow_def events coming from pmtd inner pipe.
  *
  * @param upipe description structure of the pipe
@@ -1427,6 +1473,68 @@ static int upipe_ts_demux_program_pmtd_new_flow_def(
 
         upipe_ts_demux_program->pcr_pid = pmtd_pcrpid;
         upipe_ts_demux_program_check_pcr(upipe);
+    }
+
+    const uint8_t *desc = NULL;
+    size_t len = 0;
+    bool dvb_cissa = false;
+    int sysid = -1;
+    if (ubase_check(uref_ts_flow_get_descriptor(flow_def, &desc, &len, 0))) {
+        while (len >= DESC_HEADER_SIZE) {
+            uint16_t desc_len = desc_get_length(desc);
+            if (desc_len + DESC_HEADER_SIZE > len)
+                break;
+
+            bool valid = true;
+            switch (desc_get_tag(desc)) {
+            case 0x9:
+                valid = desc09_validate(desc);
+                if (valid) {
+                    uref_ts_flow_set_capid(flow_def, desc09_get_pid(desc));
+                    sysid = desc09_get_sysid(desc);
+                    uref_ts_flow_set_sysid(flow_def, sysid);
+                    switch (sysid) {
+                        case 0x2610:
+                            upipe_ts_catd_parse_bissca_descs(upipe, flow_def,
+                                    &desc[DESC09_HEADER_SIZE],
+                                    len - DESC09_HEADER_SIZE);
+                            break;
+                        default:
+                            upipe_warn_va(upipe, "Unknown CA system 0x%04x",
+                                    sysid);
+                            break;
+                    }
+                }
+                break;
+            case 0x65:
+                valid = desc65_validate(desc);
+                if (valid) {
+                    switch(desc65_get_scrambling_mode(desc)) {
+                    case 0x10: /* DVB-CISSA version 1 */
+                        dvb_cissa = true;
+                        break;
+                    default:
+                        /* */
+                        break;
+                    }
+				}
+                break;
+            default:
+                break;
+            }
+            if (!valid)
+                upipe_warn_va(upipe, "invalid pmt descriptor 0x%x", desc_get_tag(desc));
+
+            desc_len += DESC_HEADER_SIZE;
+            desc += desc_len;
+            len -= desc_len;
+        }
+    }
+
+    if (sysid == 0x2610 && dvb_cissa) {
+        /* decode ECM */
+        uint64_t ecm_pid;
+        uref_ts_flow_get_capid(flow_def, &ecm_pid);
     }
 
     upipe_ts_demux_program_build_flow_def(upipe);
