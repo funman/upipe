@@ -110,6 +110,13 @@ UREF_ATTR_OPAQUE_VA(ts_flow, cat_descriptor, "t.cat.desc[%" PRIu64"]",
         CAT descriptor, uint64_t nb, nb)
 UREF_TS_ATTR_DESCRIPTOR(ts_flow, cat_descriptor)
 
+/* EMM BISS-CA */
+UREF_ATTR_UNSIGNED(ts_flow, emm_descriptors, "t.emm.descs",
+        number of CAT descriptors)
+UREF_ATTR_OPAQUE_VA(ts_flow, emm_descriptor, "t.emm.desc[%" PRIu64"]",
+        CAT descriptor, uint64_t nb, nb)
+UREF_TS_ATTR_DESCRIPTOR(ts_flow, emm_descriptor)
+
 /* NIT */
 UREF_ATTR_UNSIGNED(ts_flow, nid, "t.nid", network ID)
 UREF_ATTR_STRING(ts_flow, network_name, "t.netwname", network name)

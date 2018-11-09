@@ -8,6 +8,7 @@ libupipe_ts_la_SOURCES = \
 	upipe_ts_eit_decoder.c \
 	upipe_ts_nit_decoder.c \
 	upipe_ts_cat_decoder.c \
+	upipe_ts_emm_decoder.c \
 	upipe_ts_pes_decaps.c \
 	upipe_ts_pat_decoder.c \
 	upipe_ts_pmt_decoder.c \
@@ -33,12 +34,14 @@ libupipe_ts_la_SOURCES = \
 	upipe_ts_si_generator.c \
 	upipe_ts_mux.c \
 	upipe_rtp_fec.c \
+    rsa_asn1.h \
+    rsa_asn1.c \
 	$(NULL)
 
 libupipe_ts_la_CPPFLAGS = -I$(top_builddir)/include -I$(top_srcdir)/include
 libupipe_ts_la_CFLAGS = $(AM_CFLAGS) $(BITSTREAM_CFLAGS)
 libupipe_ts_la_LIBADD = $(top_builddir)/lib/upipe-modules/libupipe_modules.la \
-			@LTLIBICONV@
+			@LTLIBICONV@ -lgcrypt -lgpg-error -ltasn1
 libupipe_ts_la_LDFLAGS = -no-undefined
 
 pkgconfigdir = $(libdir)/pkgconfig
