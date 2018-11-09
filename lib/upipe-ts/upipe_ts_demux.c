@@ -3470,6 +3470,8 @@ static void upipe_ts_demux_free(struct urefcount *urefcount_real)
     uprobe_clean(&upipe_ts_demux->psim_probe);
     uprobe_clean(&upipe_ts_demux->nitd_probe);
     uprobe_clean(&upipe_ts_demux->patd_probe);
+    uprobe_clean(&upipe_ts_demux->catd_probe);
+    uprobe_clean(&upipe_ts_demux->emmd_probe);
     uprobe_clean(&upipe_ts_demux->sdtd_probe);
     uprobe_clean(&upipe_ts_demux->input_probe);
     uprobe_clean(&upipe_ts_demux->split_probe);
