@@ -324,15 +324,8 @@ static void upipe_ts_emmd_parse_sd_descs(struct upipe *upipe,
                 valid = type == 0; // AES-128-CBC
                 if (!valid)
                     break;
-                const uint8_t *key = &desc[DESC_HEADER_SIZE+1];
-                upipe_notice_va(upipe, "%s key : %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-                    odd ? "odd" : "even",
-                    key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
-                    key[8], key[9], key[10], key[11], key[12], key[13], key[14], key[15]
-                    );
-
-                memcpy(upipe_ts_emmd->aes_key[odd], key, 16);
-
+                memcpy(upipe_ts_emmd->aes_key[odd], &desc[DESC_HEADER_SIZE+1],
+                        16);
                 break;
             case 0x82:
                 valid = length == 1;
