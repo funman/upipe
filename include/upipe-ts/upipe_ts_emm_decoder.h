@@ -35,6 +35,13 @@ extern "C" {
 #define UPIPE_TS_EMMD_SIGNATURE UBASE_FOURCC('t','s','e','m')
 #define UPIPE_TS_EMMD_ECM_SIGNATURE UBASE_FOURCC('t','s','e','c')
 
+/** @This extends uprobe_event with specific events for ECM. */
+enum uprobe_ts_ecm_event {
+    UPROBE_TS_ECM_SENTINEL = UPROBE_LOCAL,
+
+    /** last continuity counter for an input (uint8_t[16], uint8_t[16]) */
+    UPROBE_TS_ECM_KEY_UPDATE,
+};
 
 /** @This returns the management structure for all ts_emmd pipes.
  *

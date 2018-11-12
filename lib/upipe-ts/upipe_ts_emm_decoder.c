@@ -1150,22 +1150,19 @@ static void upipe_ts_emmd_ecm_input(struct upipe *upipe, struct uref *uref,
         const uint8_t *even_k  = &section[13+16];
         const uint8_t *odd_k  = &section[13+16*2];
 
+        uint8_t k[2][16];
         for (int i = 0; i < 2; i++) {
-            uint8_t k[16];
-            memset(k, 0, sizeof(k));
             gcry_error_t err = gcry_cipher_setiv(upipe_ts_emmd->aes, iv, 16);
             assert(!err);
             err = gcry_cipher_setkey(upipe_ts_emmd->aes, upipe_ts_emmd->aes_key[odd], 16);
             const uint8_t *sk = upipe_ts_emmd->aes_key[odd];
             assert(!err);
-            err = gcry_cipher_decrypt(upipe_ts_emmd->aes, k, 16, i ? odd_k : even_k, 16);
+            err = gcry_cipher_decrypt(upipe_ts_emmd->aes, k[i], 16, i ? odd_k : even_k, 16);
             assert(!err);
             const uint8_t *ek = i ? odd_k : even_k;
-            upipe_dbg_va(upipe, "%s SW %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-                    i ? "odd" : "even",
-                    k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7],
-                    k[8], k[9], k[10], k[11], k[12], k[13], k[14], k[15]);
         }
+        upipe_throw(upipe, UPROBE_TS_ECM_KEY_UPDATE,
+                UPIPE_TS_EMMD_ECM_SIGNATURE, k[0], k[1]);
 
         uref_block_unmap(section_uref, 0);
     }

@@ -57,6 +57,7 @@
 
 #include <upipe-ts/upipe_ts_align.h>
 #include <upipe-ts/upipe_ts_check.h>
+#include <upipe-ts/upipe_ts_emm_decoder.h>
 
 #include <upipe-dvbcsa/upipe_dvbcsa_encrypt.h>
 #include <upipe-dvbcsa/upipe_dvbcsa_decrypt.h>
@@ -106,6 +107,21 @@ static int uprobe_dvbcsa_split_catch(struct uprobe *uprobe,
     struct uprobe_dvbcsa_split *uprobe_dvbcsa_split =
         uprobe_dvbcsa_split_from_uprobe(uprobe);
 
+    if (event == UPROBE_TS_ECM_KEY_UPDATE &&
+            ubase_get_signature(args) == UPIPE_TS_EMMD_ECM_SIGNATURE) {
+        UBASE_SIGNATURE_CHECK(args, UPIPE_TS_EMMD_ECM_SIGNATURE);
+        uint8_t *even_key = va_arg(args, uint8_t *);
+        uint8_t *odd_key  = va_arg(args, uint8_t *);
+
+        char k[33];
+        snprintf(k, sizeof(k), "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+            even_key[0], even_key[1], even_key[2], even_key[3],
+            even_key[4], even_key[5], even_key[6], even_key[7],
+            even_key[8], even_key[9], even_key[10], even_key[11],
+            even_key[12], even_key[13], even_key[14], even_key[15]);
+        ubase_assert(upipe_dvbcsa_set_key(uprobe_dvbcsa_split->dvbcsa, k));
+        return UBASE_ERR_NONE;
+    }
     if (event < UPROBE_LOCAL ||
         ubase_get_signature(args) != UPIPE_DVBCSA_SPLIT_SIGNATURE)
         return uprobe_throw_next(uprobe, upipe, event, args);
