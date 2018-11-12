@@ -92,6 +92,8 @@ struct upipe_ts_emmd {
     uint8_t ekid[8];
     gcry_sexp_t key;
 	asn1_node asn;
+    gcry_cipher_hd_t aes;
+    uint8_t aes_key[2][16];
 
     /** currently in effect EMM table */
     UPIPE_TS_PSID_TABLE_DECLARE(emm);
@@ -196,15 +198,22 @@ static struct upipe *upipe_ts_emmd_alloc(struct upipe_mgr *mgr,
 
     struct upipe_ts_emmd *upipe_ts_emmd = upipe_ts_emmd_from_upipe(upipe);
 
-    /* Load ASN.1 syntax */
-    int ret = asn1_array2tree(rsa_asn1_tab, &upipe_ts_emmd->asn, NULL);
-    if (ret != ASN1_SUCCESS) {
-        upipe_err_va(upipe, "Loading RSA ASN.1 failed: %s", asn1_strerror(ret));
+    gcry_error_t err = gcry_cipher_open(&upipe_ts_emmd->aes, GCRY_CIPHER_AES,
+            GCRY_CIPHER_MODE_CBC, 0);
+    if (err) {
+        upipe_err_va(upipe, "AES cipher failed: %s", gcry_strerror(err));
 		upipe_ts_emmd_free_void(upipe);
 		return NULL;
     }
 
-    upipe_ts_emmd->key = NULL;
+    /* Load ASN.1 syntax */
+    int ret = asn1_array2tree(rsa_asn1_tab, &upipe_ts_emmd->asn, NULL);
+    if (ret != ASN1_SUCCESS) {
+        upipe_err_va(upipe, "Loading RSA ASN.1 failed: %s", asn1_strerror(ret));
+        gcry_cipher_close(upipe_ts_emmd->aes);
+		upipe_ts_emmd_free_void(upipe);
+		return NULL;
+    }
 
     read_rsa_file(upipe, "/home/fun/biss/keys/IRD1.pem");
 
@@ -290,6 +299,7 @@ static void upipe_ts_emmd_parse_sd_descs(struct upipe *upipe,
                                       struct uref *flow_def,
                                       const uint8_t *descl, uint16_t desclength)
 {
+    struct upipe_ts_emmd *upipe_ts_emmd = upipe_ts_emmd_from_upipe(upipe);
     const uint8_t *desc;
     int j = 0;
 
@@ -320,6 +330,9 @@ static void upipe_ts_emmd_parse_sd_descs(struct upipe *upipe,
                     key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
                     key[8], key[9], key[10], key[11], key[12], key[13], key[14], key[15]
                     );
+
+                memcpy(upipe_ts_emmd->aes_key[odd], key, 16);
+
                 break;
             case 0x82:
                 valid = length == 1;
@@ -951,6 +964,7 @@ static void upipe_ts_emmd_free(struct upipe *upipe)
 
     struct upipe_ts_emmd *upipe_ts_emmd = upipe_ts_emmd_from_upipe(upipe);
 
+    gcry_cipher_close(upipe_ts_emmd->aes);
 
     asn1_delete_structure(&upipe_ts_emmd->asn);
     if (upipe_ts_emmd->key)
@@ -1119,6 +1133,7 @@ static void upipe_ts_emmd_ecm_parse_sd_descs(struct upipe *upipe,
                     key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
                     key[8], key[9], key[10], key[11], key[12], key[13], key[14], key[15]
                     );
+
                 break;
             case 0x82:
                 valid = length == 1;
@@ -1156,6 +1171,8 @@ static void upipe_ts_emmd_ecm_input(struct upipe *upipe, struct uref *uref,
 {
     struct upipe_ts_emmd_ecm *upipe_ts_emmd_ecm = upipe_ts_emmd_ecm_from_upipe(upipe);
     assert(upipe_ts_emmd_ecm->flow_def_input != NULL);
+    struct upipe_ts_emmd *upipe_ts_emmd = upipe_ts_emmd_from_sub_mgr(upipe->mgr);
+
 
     if (!upipe_ts_psid_table_section(upipe_ts_emmd_ecm->next_ecm, uref))
         return;
@@ -1207,18 +1224,25 @@ static void upipe_ts_emmd_ecm_input(struct upipe *upipe, struct uref *uref,
         bool odd = section[12] & 0x80;
         const uint8_t *iv = &section[13+0];
         upipe_dbg_va(upipe, "ESID %04x ONID %04x", esid, onid);
-        upipe_dbg_va(upipe, "IV %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-            iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7],
-            iv[8], iv[9], iv[10], iv[11], iv[12], iv[13], iv[14], iv[15]);
         const uint8_t *even_k  = &section[13+16];
-        upipe_dbg_va(upipe, "EVEN K %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-            even_k[0], even_k[1], even_k[2], even_k[3], even_k[4], even_k[5], even_k[6], even_k[7],
-            even_k[8], even_k[9], even_k[10], even_k[11], even_k[12], even_k[13], even_k[14], even_k[15]);
         const uint8_t *odd_k  = &section[13+16*2];
-        upipe_dbg_va(upipe, "ODD K %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-            odd_k[0], odd_k[1], odd_k[2], odd_k[3], odd_k[4], odd_k[5], odd_k[6], odd_k[7],
-            odd_k[8], odd_k[9], odd_k[10], odd_k[11], odd_k[12], odd_k[13], odd_k[14], odd_k[15]);
 
+        for (int i = 0; i < 2; i++) {
+            uint8_t k[16];
+            memset(k, 0, sizeof(k));
+            gcry_error_t err = gcry_cipher_setiv(upipe_ts_emmd->aes, iv, 16);
+            assert(!err);
+            err = gcry_cipher_setkey(upipe_ts_emmd->aes, upipe_ts_emmd->aes_key[odd], 16);
+            const uint8_t *sk = upipe_ts_emmd->aes_key[odd];
+            assert(!err);
+            err = gcry_cipher_decrypt(upipe_ts_emmd->aes, k, 16, i ? odd_k : even_k, 16);
+            assert(!err);
+            const uint8_t *ek = i ? odd_k : even_k;
+            upipe_dbg_va(upipe, "%s SW %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+                    i ? "odd" : "even",
+                    k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7],
+                    k[8], k[9], k[10], k[11], k[12], k[13], k[14], k[15]);
+        }
 
         uref_block_unmap(section_uref, 0);
     }
