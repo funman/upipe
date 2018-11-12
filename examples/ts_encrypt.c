@@ -113,13 +113,20 @@ static int uprobe_dvbcsa_split_catch(struct uprobe *uprobe,
         uint8_t *even_key = va_arg(args, uint8_t *);
         uint8_t *odd_key  = va_arg(args, uint8_t *);
 
-        char k[33];
-        snprintf(k, sizeof(k), "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+        char ek[33];
+        snprintf(ek, sizeof(ek), "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
             even_key[0], even_key[1], even_key[2], even_key[3],
             even_key[4], even_key[5], even_key[6], even_key[7],
             even_key[8], even_key[9], even_key[10], even_key[11],
             even_key[12], even_key[13], even_key[14], even_key[15]);
-        ubase_assert(upipe_dvbcsa_set_key(uprobe_dvbcsa_split->dvbcsa, k));
+
+        char ok[33];
+        snprintf(ok, sizeof(ok), "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+            odd_key[0], odd_key[1], odd_key[2], odd_key[3],
+            odd_key[4], odd_key[5], odd_key[6], odd_key[7],
+            odd_key[8], odd_key[9], odd_key[10], odd_key[11],
+            odd_key[12], odd_key[13], odd_key[14], odd_key[15]);
+        ubase_assert(upipe_dvbcsa_set_key(uprobe_dvbcsa_split->dvbcsa, ek, ok));
         return UBASE_ERR_NONE;
     }
     if (event < UPROBE_LOCAL ||
@@ -418,7 +425,7 @@ int main(int argc, char *argv[])
     }
     assert(output);
     upipe_mgr_release(upipe_dvbcsa_mgr);
-    ubase_assert(upipe_dvbcsa_set_key(output, key));
+    ubase_assert(upipe_dvbcsa_set_key(output, key, NULL));
     uprobe_dvbcsa_split.dvbcsa = output;
 
     struct upipe_mgr *upipe_agg_mgr = upipe_agg_mgr_alloc();
