@@ -33,6 +33,8 @@ extern "C" {
 #include <upipe-ts/upipe_ts_demux.h>
 
 #define UPIPE_TS_EMMD_SIGNATURE UBASE_FOURCC('t','s','e','m')
+#define UPIPE_TS_EMMD_ECM_SIGNATURE UBASE_FOURCC('t','s','e','c')
+
 
 /** @This returns the management structure for all ts_emmd pipes.
  *

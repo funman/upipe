@@ -13,7 +13,6 @@ myinclude_HEADERS = \
 	upipe_ts_nit_decoder.h \
 	upipe_ts_cat_decoder.h \
 	upipe_ts_emm_decoder.h \
-	upipe_ts_ecm_decoder.h \
 	upipe_ts_pat_decoder.h \
 	upipe_ts_pes_decaps.h \
 	upipe_ts_pes_encaps.h \

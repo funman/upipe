@@ -82,7 +82,6 @@
 #include <upipe-ts/upipe_ts_pat_decoder.h>
 #include <upipe-ts/upipe_ts_cat_decoder.h>
 #include <upipe-ts/upipe_ts_emm_decoder.h>
-#include <upipe-ts/upipe_ts_ecm_decoder.h>
 #include <upipe-ts/upipe_ts_pmt_decoder.h>
 #include <upipe-ts/upipe_ts_pes_decaps.h>
 #include <upipe-ts/upipe_ts_scte35_decoder.h>
@@ -158,8 +157,6 @@ struct upipe_ts_demux_mgr {
     struct upipe_mgr *ts_catd_mgr;
     /** pointer to ts_emmd manager */
     struct upipe_mgr *ts_emmd_mgr;
-    /** pointer to ts_ecmd manager */
-    struct upipe_mgr *ts_ecmd_mgr;
     /** pointer to ts_nitd manager */
     struct upipe_mgr *ts_nitd_mgr;
     /** pointer to ts_sdtd manager */
@@ -1311,8 +1308,8 @@ static int upipe_ts_demux_configure_ecm(struct upipe *upipe,
 
     /* allocate EIT decoder */
     upipe_ts_demux_program->ecmd =
-        upipe_void_alloc_output(upipe_ts_demux_program->psi_split_output_ecm,
-                   ts_demux_mgr->ts_ecmd_mgr,
+        upipe_void_alloc_output_sub(upipe_ts_demux_program->psi_split_output_ecm,
+                   demux->emmd,
                    uprobe_pfx_alloc(
                        uprobe_use(&upipe_ts_demux_program->ecmd_probe),
                        UPROBE_LOG_VERBOSE, "ecmd"));
@@ -3651,7 +3648,6 @@ static void upipe_ts_demux_mgr_free(struct urefcount *urefcount)
     upipe_mgr_release(ts_demux_mgr->ts_patd_mgr);
     upipe_mgr_release(ts_demux_mgr->ts_catd_mgr);
     upipe_mgr_release(ts_demux_mgr->ts_emmd_mgr);
-    upipe_mgr_release(ts_demux_mgr->ts_ecmd_mgr);
     upipe_mgr_release(ts_demux_mgr->ts_nitd_mgr);
     upipe_mgr_release(ts_demux_mgr->ts_sdtd_mgr);
     upipe_mgr_release(ts_demux_mgr->ts_tdtd_mgr);
@@ -3750,7 +3746,6 @@ struct upipe_mgr *upipe_ts_demux_mgr_alloc(void)
     ts_demux_mgr->ts_patd_mgr = upipe_ts_patd_mgr_alloc();
     ts_demux_mgr->ts_catd_mgr = upipe_ts_catd_mgr_alloc();
     ts_demux_mgr->ts_emmd_mgr = upipe_ts_emmd_mgr_alloc();
-    ts_demux_mgr->ts_ecmd_mgr = upipe_ts_ecmd_mgr_alloc();
     ts_demux_mgr->ts_nitd_mgr = upipe_ts_nitd_mgr_alloc();
     ts_demux_mgr->ts_sdtd_mgr = upipe_ts_sdtd_mgr_alloc();
     ts_demux_mgr->ts_tdtd_mgr = upipe_ts_tdtd_mgr_alloc();
