@@ -96,12 +96,14 @@ struct upipe_dvbcsa_dec {
     struct uchain blockers;
     union {
         /** dvbcsa key (bs) */
-        dvbcsa_bs_key_t *key_bs;
+        dvbcsa_bs_key_t *key_bs[2];
         /** dvbcsa key */
-        dvbcsa_key_t *key;
+        dvbcsa_key_t *key[2];
         /** AES handle */
         gcry_cipher_hd_t aes[2];
     };
+    /* active current key */
+    bool odd;
     /** maximum number of packet per batch */
     unsigned int batch_size;
     /** batch items */
@@ -149,17 +151,22 @@ static void upipe_dvbcsa_dec_free_key(struct upipe *upipe)
 
     switch (upipe_dvbcsa_dec->mode) {
     case CSA:
-        dvbcsa_key_free(upipe_dvbcsa_dec->key);
+        for (int i = 0; i < 2; i++)
+            dvbcsa_key_free(upipe_dvbcsa_dec->key[i]);
         break;
     case CSA_BS:
-        dvbcsa_bs_key_free(upipe_dvbcsa_dec->key_bs);
+        for (int i = 0; i < 2; i++)
+            dvbcsa_bs_key_free(upipe_dvbcsa_dec->key_bs[i]);
         break;
     case AES:
-        for (int i = 0; i < 2; i++) 
+        for (int i = 0; i < 2; i++)
             if (upipe_dvbcsa_dec->aes[i])
                 gcry_cipher_close(upipe_dvbcsa_dec->aes[i]);
         break;
     }
+
+    for (int i = 0; i < 2; i++)
+        upipe_dvbcsa_dec->key[i] = NULL;
 }
 
 /** @internal @This frees a dvbcsa decription pipe.
@@ -222,7 +229,8 @@ static struct upipe *upipe_dvbcsa_dec_alloc(struct upipe_mgr *mgr,
     upipe_dvbcsa_dec_init_upump_mgr(upipe);
     upipe_dvbcsa_dec_init_upump(upipe);
     upipe_dvbcsa_common_init(common);
-    upipe_dvbcsa_dec->key = NULL;
+    for (int i = 0; i < 2; i++)
+        upipe_dvbcsa_dec->key[i] = NULL;
     unsigned bs_size = dvbcsa_bs_batch_size();
     upipe_dvbcsa_dec->batch_size = bs_size;
     upipe_dvbcsa_dec->batch = malloc((bs_size + 1) *
@@ -295,7 +303,7 @@ static void upipe_dvbcsa_dec_flush(struct upipe *upipe,
         upipe_dvbcsa_dec->batch[current].data = NULL;
         upipe_dvbcsa_dec->batch[current].len = 0;
         uint64_t before = uclock_now(upipe_dvbcsa_dec->uclock);
-        dvbcsa_bs_decrypt(upipe_dvbcsa_dec->key_bs,
+        dvbcsa_bs_decrypt(upipe_dvbcsa_dec->key_bs[upipe_dvbcsa_dec->odd],
                           upipe_dvbcsa_dec->batch, 184);
         uint64_t after = uclock_now(upipe_dvbcsa_dec->uclock);
         if ((after - before) > DVBCSA_LATENCY)
@@ -354,7 +362,7 @@ static void upipe_dvbcsa_dec_input(struct upipe *upipe,
     }
 
     /* output if no dvbcsa key set */
-    if (unlikely(!upipe_dvbcsa_dec->key)) {
+    if (unlikely(!upipe_dvbcsa_dec->key[0])) {
         if (unlikely(!first))
             upipe_dvbcsa_dec_flush(upipe, upump_p);
         upipe_dvbcsa_dec_output(upipe, uref, upump_p);
@@ -376,7 +384,10 @@ static void upipe_dvbcsa_dec_input(struct upipe *upipe,
     uint16_t pid = ts_get_pid(ts_header);
     uref_block_peek_unmap(uref, 0, buf, ts_header);
 
+    bool odd = scrambling & (1 << 1);
+
     if (scrambling == 0x0 || !has_payload ||
+        (odd && !upipe_dvbcsa_dec->key[1]) ||
         !upipe_dvbcsa_common_check_pid(common, pid)) {
         if (first)
             upipe_dvbcsa_dec_output(upipe, uref, upump_p);
@@ -421,15 +432,15 @@ static void upipe_dvbcsa_dec_input(struct upipe *upipe,
         return;
     }
 
+    ts_set_scrambling(ts, 0);
+
     if (upipe_dvbcsa_dec->mode == AES) {
         /* from biss2 spec */
         static const uint8_t cissa_iv[16] = {
             0x44, 0x56, 0x42, 0x54, 0x4d, 0x43, 0x50, 0x54,
             0x41, 0x45, 0x53, 0x43, 0x49, 0x53, 0x53, 0x41,
         };
-        bool odd = scrambling == 0x3;
         gcry_cipher_setiv(upipe_dvbcsa_dec->aes[odd], cissa_iv, 16);
-        ts_set_scrambling(ts, 0);
         unsigned aes_len = (size - ts_header_size) & ~0xf;
         gcry_error_t err = gcry_cipher_decrypt(upipe_dvbcsa_dec->aes[odd],
                 ts + ts_header_size, aes_len, NULL, 0);
@@ -438,19 +449,23 @@ static void upipe_dvbcsa_dec_input(struct upipe *upipe,
     }
 
     if (upipe_dvbcsa_dec->mode == CSA) {
-        ts_set_scrambling(ts, 0);
-        dvbcsa_decrypt(upipe_dvbcsa_dec->key,
+        dvbcsa_decrypt(upipe_dvbcsa_dec->key[odd],
                 ts + ts_header_size,
                 size - ts_header_size);
         return upipe_dvbcsa_dec_output(upipe, uref, upump_p);
     }
+
+    /* biss mode */
+
+    if (!first && upipe_dvbcsa_dec-> odd != odd)
+        upipe_dvbcsa_dec_flush(upipe, upump_p);
+    upipe_dvbcsa_dec-> odd = odd;
 
     unsigned current = upipe_dvbcsa_dec->current;
     upipe_dvbcsa_dec->batch[current].data = ts + ts_header_size;
     upipe_dvbcsa_dec->batch[current].len = size - ts_header_size;
     upipe_dvbcsa_dec->mapped[current] = uref;
     upipe_dvbcsa_dec->current++;
-    ts_set_scrambling(ts, 0);
 
     /* hold uref */
     upipe_dvbcsa_dec_hold_input(upipe, uref);
@@ -514,49 +529,73 @@ static int upipe_dvbcsa_dec_set_key(struct upipe *upipe, const char *even_key, c
         upipe_dvbcsa_dec_from_upipe(upipe);
 
     upipe_dvbcsa_dec_free_key(upipe);
-    upipe_dvbcsa_dec->key = NULL;
-
-    if (!even_key)
-        return UBASE_ERR_NONE;
 
     struct ustring_dvbcsa_cw even_cw = ustring_to_dvbcsa_cw(ustring_from_str(even_key));
     if (unlikely(ustring_is_empty(even_cw.str) || strlen(even_key) != even_cw.str.len))
         return UBASE_ERR_INVALID;
 
+    /* odd key, optional */
     struct ustring_dvbcsa_cw odd_cw = ustring_to_dvbcsa_cw(ustring_from_str(odd_key));
-    if (unlikely(ustring_is_empty(odd_cw.str) || strlen(even_key) != odd_cw.str.len))
+    if (unlikely(!ustring_is_empty(odd_cw.str) && strlen(even_key) != odd_cw.str.len))
         return UBASE_ERR_INVALID;
-
 
     upipe_notice(upipe, "key changed");
     if (upipe_dvbcsa_dec->mode == CSA_BS) {
-        upipe_dvbcsa_dec->key_bs = dvbcsa_bs_key_alloc();
-        UBASE_ALLOC_RETURN(upipe_dvbcsa_dec->key_bs);
-        dvbcsa_bs_key_set(even_cw.value, upipe_dvbcsa_dec->key_bs);
+        upipe_dvbcsa_dec->key_bs[0] = dvbcsa_bs_key_alloc();
+        UBASE_ALLOC_RETURN(upipe_dvbcsa_dec->key_bs[0]);
+        dvbcsa_bs_key_set(even_cw.value, upipe_dvbcsa_dec->key_bs[0]);
+        if (ustring_is_empty(odd_cw.str))
+            return UBASE_ERR_NONE;
+
+        upipe_dvbcsa_dec->key_bs[1] = dvbcsa_bs_key_alloc();
+        if (!upipe_dvbcsa_dec->key_bs[1])
+            upipe_dvbcsa_dec_free_key(upipe);
+        UBASE_ALLOC_RETURN(upipe_dvbcsa_dec->key_bs[1]);
+        dvbcsa_bs_key_set(odd_cw.value, upipe_dvbcsa_dec->key_bs[1]);
     } else if (even_cw.str.len >= 32) {
         upipe_dvbcsa_dec->mode = AES;
-        for (int i = 0; i < 2; i++) {
-            gcry_error_t err = gcry_cipher_open(&upipe_dvbcsa_dec->aes[i], GCRY_CIPHER_AES,
-                    GCRY_CIPHER_MODE_CBC, 0);
-            if (err) {
-                upipe_dvbcsa_dec->aes[i] = NULL;
-                goto error;
-            }
-            err = gcry_cipher_setkey(upipe_dvbcsa_dec->aes[i], i ? odd_cw.aes : even_cw.aes, 16);
-            if (!err)
-                continue;
+        gcry_error_t err;
+        err = gcry_cipher_open(&upipe_dvbcsa_dec->aes[0], GCRY_CIPHER_AES,
+                GCRY_CIPHER_MODE_CBC, 0);
+        if (err)
+            goto error;
 
+        err = gcry_cipher_setkey(upipe_dvbcsa_dec->aes[0], even_cw.aes, 16);
+        if (err)
+            goto error;
+
+        if (ustring_is_empty(odd_cw.str))
+            return UBASE_ERR_NONE;
+
+        err = gcry_cipher_open(&upipe_dvbcsa_dec->aes[1], GCRY_CIPHER_AES,
+                GCRY_CIPHER_MODE_CBC, 0);
+        if (err)
+            goto error;
+
+        err = gcry_cipher_setkey(upipe_dvbcsa_dec->aes[1], odd_cw.aes, 16);
+        if (err)
+            goto error;
+
+        return UBASE_ERR_NONE;
 error:
-            upipe_dvbcsa_dec_free_key(upipe);
-            upipe_dvbcsa_dec->aes[0] = upipe_dvbcsa_dec->aes[1] = NULL;
-            return UBASE_ERR_EXTERNAL;
-        }
+        upipe_dvbcsa_dec_free_key(upipe);
+        return UBASE_ERR_EXTERNAL;
     } else {
         upipe_dvbcsa_dec->mode = CSA;
-        upipe_dvbcsa_dec->key = dvbcsa_key_alloc();
-        UBASE_ALLOC_RETURN(upipe_dvbcsa_dec->key);
-        dvbcsa_key_set(even_cw.value, upipe_dvbcsa_dec->key);
+        upipe_dvbcsa_dec->key[0] = dvbcsa_key_alloc();
+        UBASE_ALLOC_RETURN(upipe_dvbcsa_dec->key[0]);
+        dvbcsa_key_set(even_cw.value, upipe_dvbcsa_dec->key[0]);
+
+        if (ustring_is_empty(odd_cw.str))
+            return UBASE_ERR_NONE;
+
+        upipe_dvbcsa_dec->key[1] = dvbcsa_key_alloc();
+        if (!upipe_dvbcsa_dec->key[1])
+            upipe_dvbcsa_dec_free_key(upipe);
+        UBASE_ALLOC_RETURN(upipe_dvbcsa_dec->key[1]);
+        dvbcsa_key_set(odd_cw.value, upipe_dvbcsa_dec->key[1]);
     }
+
     return UBASE_ERR_NONE;
 }
 
