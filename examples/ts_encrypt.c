@@ -158,7 +158,7 @@ static void usage(const char *name)
 {
     fprintf(stderr, "%s [options] <input> <output>\n"
             "\t-v   : be more verbose\n"
-            "\t-k   : set BISS key\n"
+            "\t-k   : set BISS key (use twice for odd key)\n"
             "\t-L   : set the maximum latency in milliseconds\n"
             "\t-i   : RT priority for source and sink\n"
             "\t-D   : decrypt instead of encrypt\n"
@@ -192,7 +192,7 @@ int main(int argc, char *argv[])
     int log_level = UPROBE_LOG_NOTICE;
     bool decryption = false;
     bool udp = false;
-    const char *key = NULL;
+    const char *key[2] = { NULL, NULL };
     int latency = -1;
     int c;
 
@@ -205,7 +205,15 @@ int main(int argc, char *argv[])
                     log_level = UPROBE_LOG_DEBUG;
                 break;
             case OPT_KEY:
-                key = optarg;
+                if (!key[0]) {
+                    key[0] = optarg;
+                } else if (!key[1]) {
+                    key[1] = optarg;
+                } else {
+                    fprintf(stderr, "key specified more than twice");
+                    usage(argv[0]);
+                    exit(-1);
+                }
                 break;
             case OPT_LATENCY:
                 latency = atoi(optarg);
@@ -425,7 +433,7 @@ int main(int argc, char *argv[])
     }
     assert(output);
     upipe_mgr_release(upipe_dvbcsa_mgr);
-    ubase_assert(upipe_dvbcsa_set_key(output, key, NULL));
+    ubase_assert(upipe_dvbcsa_set_key(output, key[0], key[1]));
     uprobe_dvbcsa_split.dvbcsa = output;
 
     struct upipe_mgr *upipe_agg_mgr = upipe_agg_mgr_alloc();
