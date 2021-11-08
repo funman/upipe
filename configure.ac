@@ -125,6 +125,7 @@ PKG_CHECK_EXISTS([libgcrypt], [LIBUPIPE_TS_PKGCONFIG_REQUIRES="$LIBUPIPE_TS_PKGC
 PKG_CHECK_UPIPE(TASN1, libtasn1, [libtasn1.h])
 PKG_CHECK_EXISTS([libtasn1], [LIBUPIPE_TS_PKGCONFIG_REQUIRES="$LIBUPIPE_TS_PKGCONFIG_REQUIRES libtasn1"])
 PKG_CHECK_UPIPE(BITSTREAM, bitstream >= 1.4, [bitstream/common.h])
+PKG_CHECK_UPIPE(LIBFABRIC, libfabric >= 1.9, [rdma/fi_cm.h])
 PKG_CHECK_UPIPE(AVUTIL, libavutil, [libavutil/avutil.h])
 PKG_CHECK_UPIPE(AVFORMAT, [libavformat >= 53.32.0 libavcodec libavutil], [libavformat/avformat.h libavformat/avio.h libavutil/avutil.h])
 PKG_CHECK_UPIPE(AVFILTER, libavfilter >= 6.82.100 libavutil, [libavfilter/avfilter.h libavutil/avutil.h])

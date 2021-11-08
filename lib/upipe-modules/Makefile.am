@@ -104,6 +104,11 @@ libupipe_modules_la_SOURCES += \
 	upipe_vanc_decoder.c \
 	$(NULL)
 libupipe_modules_la_CFLAGS = $(AM_CFLAGS) $(BITSTREAM_CFLAGS)
+
+if HAVE_LIBFABRIC
+libupipe_modules_la_SOURCES += \
+	upipe_fi_source.c
+endif
 endif
 
 libupipe_modules_la_CPPFLAGS = -I$(top_builddir)/include -I$(top_srcdir)/include
