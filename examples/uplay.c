@@ -61,6 +61,7 @@
 #include <upipe-modules/upipe_subpic_schedule.h>
 #include <upipe-modules/upipe_file_source.h>
 #include <upipe-modules/upipe_udp_source.h>
+#include <upipe-modules/upipe_fi_source.h>
 #include <upipe-modules/upipe_rtp_source.h>
 #include <upipe-modules/upipe_http_source.h>
 #include <upipe-modules/upipe_null.h>
@@ -103,6 +104,8 @@
 #define DEC_OUT_QUEUE_LENGTH    5
 #define SOUND_QUEUE_LENGTH      10
 
+/* true if we receive from libfabric */
+static bool fabric = false;
 /* true if we receive raw udp */
 static bool udp = false;
 /** cube glx output */
@@ -568,14 +571,16 @@ static void uplay_start(struct upump *upump)
 
         /* try rtp source */
         struct upipe_mgr *upipe_rtpsrc_mgr;
-        if (!udp)
+        if (fabric)
+            upipe_rtpsrc_mgr = upipe_fisrc_mgr_alloc();
+        else if (!udp)
             upipe_rtpsrc_mgr = upipe_rtpsrc_mgr_alloc();
         else
             upipe_rtpsrc_mgr = upipe_udpsrc_mgr_alloc();
         upipe_src = upipe_void_alloc(upipe_rtpsrc_mgr,
                 uprobe_pfx_alloc(uprobe_use(uprobe_src),
                                  UPROBE_LOG_VERBOSE,
-                                 udp ? "udpsrc" : "rtpsrc"));
+                                 fabric ? "fisrc" : (udp ? "udpsrc" : "rtpsrc")));
         upipe_mgr_release(upipe_rtpsrc_mgr);
 
         if (upipe_src != NULL && ubase_check(upipe_set_uri(upipe_src, uri))) {
@@ -700,8 +705,11 @@ int main(int argc, char **argv)
 {
     enum uprobe_log_level loglevel = UPROBE_LOG_LEVEL;
     int opt;
-    while ((opt = getopt(argc, argv, "udqcA:V:S:P:R:s:D:")) != -1) {
+    while ((opt = getopt(argc, argv, "fudqcA:V:S:P:R:s:D:")) != -1) {
         switch (opt) {
+            case 'f':
+                fabric = true;
+                break;
             case 'u':
                 udp = true;
                 break;
