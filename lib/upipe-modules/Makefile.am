@@ -92,6 +92,9 @@ libupipe_modules_la_SOURCES += \
 	upipe_udp_sink.c
 endif
 
+libupipe_modules_la_CPPFLAGS = -I$(top_builddir)/include -I$(top_srcdir)/include
+libupipe_modules_la_LIBADD = -lm $(top_builddir)/lib/upipe/libupipe.la
+
 if HAVE_BITSTREAM
 libupipe_modules_la_SOURCES += \
 	upipe_rtp_decaps.c \
@@ -105,14 +108,14 @@ libupipe_modules_la_SOURCES += \
 	$(NULL)
 libupipe_modules_la_CFLAGS = $(AM_CFLAGS) $(BITSTREAM_CFLAGS)
 
+endif
+
 if HAVE_LIBFABRIC
 libupipe_modules_la_SOURCES += \
 	upipe_fi_source.c
+libupipe_modules_la_CPPFLAGS += $(LIBFABRIC_CFLAGS)
+libupipe_modules_la_LIBADD += $(LIBFABRIC_LIBS)
 endif
-endif
-
-libupipe_modules_la_CPPFLAGS = -I$(top_builddir)/include -I$(top_srcdir)/include
-libupipe_modules_la_LIBADD = -lm $(top_builddir)/lib/upipe/libupipe.la
 
 libupipe_modules_la_LDFLAGS = -no-undefined
 
