@@ -1,8 +1,10 @@
 /*
  * Copyright (C) 2012-2015 OpenHeadend S.A.R.L.
+ * Copyright (C) 2022 Open Broadcast Systems Ltd
  *
  * Authors: Christophe Massiot
  *          Benjamin Cohen
+ *          Rafaël Carré
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -63,8 +65,9 @@
 #include <upipe/ubase.h>
 #include <upipe/uclock.h>
 #include <upipe/uref.h>
-#include <upipe/uref_block.h>
-#include <upipe/uref_block_flow.h>
+#include <upipe/uref_pic.h>
+#include <upipe/uref_pic_flow.h>
+#include <upipe/uref_pic_flow_formats.h>
 #include <upipe/uref_clock.h>
 #include <upipe/upump.h>
 #include <upipe/upipe.h>
@@ -80,6 +83,8 @@
 #include <upipe/upipe_helper_output_size.h>
 #include <upipe-modules/upipe_fi_source.h>
 
+#include "upipe_udp.h"
+
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -90,14 +95,30 @@
 #include <netdb.h>
 #include <assert.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <rdma/fi_cm.h>
 
 /** default size of buffers when unspecified */
-#define UBUF_DEFAULT_SIZE       4096
+#define UBUF_DEFAULT_SIZE      8961
 
 #define UDP_DEFAULT_TTL 0
 #define FI_DEFAULT_PORT 47592
+
+#define MAX_IP_STRING_LENGTH                (64)
+
+/// @brief Maximum EFA device GID length. Contains GID + QPN (see efa_ep_addr).
+#define MAX_IPV6_GID_LENGTH                 (32)
+
+/// @brief Maximum IPV6 address string length.
+#define MAX_IPV6_ADDRESS_STRING_LENGTH      (64)
+
+/// @brief Maximum connection name string length.
+#define CDI_MAX_CONNECTION_NAME_STRING_LENGTH           (128)
+
+/// @brief Maximum stream name string length.
+#define CDI_MAX_STREAM_NAME_STRING_LENGTH               (CDI_MAX_CONNECTION_NAME_STRING_LENGTH+10)
 
 /** @hidden */
 static int upipe_fisrc_check(struct upipe *upipe, struct uref *flow_format);
@@ -139,7 +160,14 @@ struct upipe_fisrc {
     struct upump *upump;
     /** read size */
     unsigned int output_size;
+    struct upump *upump2;
 
+    /** udp socket descriptor */
+    int fd;
+    /** udp socket uri */
+    char *uri;
+    /* */
+    struct sockaddr_in dst;
 
 ////
     int max_msg_size;
@@ -157,13 +185,21 @@ struct upipe_fisrc {
     struct fid_mr *mr;
     struct fid_av *av;
 
-    struct fid_mr no_mr;
     uint64_t tx_seq, rx_seq, tx_cq_cntr, rx_cq_cntr;
 
     fi_addr_t remote_fi_addr;
     void *buf, *tx_buf, *rx_buf;
     size_t x_size;
+    size_t nn;
 
+    uint8_t state;
+
+    uint16_t ctrl_packet_num;
+    uint8_t senders_gid_array[MAX_IPV6_GID_LENGTH];
+    char senders_ip_str[MAX_IP_STRING_LENGTH+1];
+
+    struct uref *output_uref;
+    size_t current_offset;
 
     /** public upipe structure */
     struct upipe upipe;
@@ -188,18 +224,204 @@ UPIPE_HELPER_UCLOCK(upipe_fisrc, uclock, uclock_request, upipe_fisrc_check,
 
 UPIPE_HELPER_UPUMP_MGR(upipe_fisrc, upump_mgr)
 UPIPE_HELPER_UPUMP(upipe_fisrc, upump, upump_mgr)
+UPIPE_HELPER_UPUMP(upipe_fisrc, upump2, upump_mgr)
 UPIPE_HELPER_OUTPUT_SIZE(upipe_fisrc, output_size)
 
+typedef enum {
+    kProbeCommandReset = 1, ///< Request to reset the connection. Start with 1 so no commands have the value 0.
+    kProbeCommandPing,      ///< Request to ping the connection.
+    kProbeCommandConnected, ///< Notification that connection has been established (probe has completed).
+    kProbeCommandAck,       ///< Packet is an ACK response to a previously sent command.
+    kProbeCommandProtocolVersion, ///< Packet contains protocol version of sender.
+} ProbeCommand;
+
+static const char *get_cmd(ProbeCommand cmd)
+{
+    static const char *foo[] = {
+        [kProbeCommandReset] = "Reset",
+        [kProbeCommandPing] = "Ping",
+        [kProbeCommandConnected] = "Connected",
+        [kProbeCommandAck] = "Ack",
+        [kProbeCommandProtocolVersion] = "ProtocolVersion",
+    };
+
+    if (cmd < kProbeCommandReset || cmd > kProbeCommandProtocolVersion)
+        return "?";
+
+    return foo[cmd];
+}
+
+static void put_32le(uint8_t *buf, const uint32_t val)
+{
+    for (int i = 0; i < 4; i++)
+        buf[i] = (val >> 8*i) & 0xff;
+}
+
+static uint32_t get_32le(const uint8_t *buf)
+{
+    uint32_t val = 0;
+    for (int i = 0; i < 4; i++)
+        val |= buf[i] << i*8;
+    return val;
+}
+
+static uint64_t get_64le(const uint8_t *buf)
+{
+    uint64_t val = 0;
+    for (int i = 0; i < 8; i++)
+        val |= buf[i] << i*8;
+    return val;
+}
+
+static void put_16le(uint8_t *buf, const uint16_t val)
+{
+    *buf++ = val & 0xff;
+    *buf++ = val >> 8;
+}
+
+static uint16_t get_16le(const uint8_t *buf)
+{
+    uint16_t val = *buf++;
+    val |= *buf << 8;
+    return val;
+}
+
+/**
+ * @brief Calculate a checksum and return it.
+ *
+ * @param buffer_ptr Pointer to data to calculate checksum.
+ * @param size Size of buffer in bytes.
+ *
+ * @return Calculated checksum value.
+ */
+static uint16_t CalculateChecksum(const uint8_t *buf, int size, const uint8_t *csum_pos)
+{
+    uint32_t cksum = 0;
+
+    // Sum entire packet.
+    while (size > 1) {
+        uint16_t word = get_16le(buf);
+        if (csum_pos) { /* zero checksum when verifying */
+            if (csum_pos == buf+1)
+                word &= 0x00ff;
+            else if (csum_pos == buf-1)
+                word &= 0xff00;
+            else if (csum_pos == buf) /* should not happen */ {
+                word = 0;
+                abort();
+            }
+        }
+        cksum += word;
+        buf += 2;
+        size -= 2;
+    }
+
+    // Pad to 16-bit boundary if necessary.
+    if (size == 1) {
+        cksum += *buf;
+    }
+
+    // Add carries and do one's complement.
+    cksum = (cksum >> 16) + (cksum & 0xffff);
+    cksum += (cksum >> 16);
+    return (uint16_t)(~cksum);
+}
+
+static void upipe_fisrc_parse_cmd(struct upipe *upipe, const uint8_t *buf, size_t n, ProbeCommand *command, uint16_t *pkt_num)
+{
+    struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
+    const uint8_t *orig_buf = buf;
+    assert(n > 100);
+
+    uint8_t v     = buf[0]; ///< CDI protocol version number.
+    uint8_t major = buf[1]; ///< CDI protocol major version number.
+    uint8_t probe = buf[2]; ///< CDI probe version number.
+
+    buf += 3;
+    n -= 3;
+
+    *command = get_32le(buf);
+    buf += 4;
+    n -= 4;
+
+    memcpy(upipe_fisrc->senders_ip_str, buf, MAX_IP_STRING_LENGTH);
+    upipe_fisrc->senders_ip_str[MAX_IP_STRING_LENGTH] = '\0';
+    buf += MAX_IP_STRING_LENGTH;
+    n -= MAX_IP_STRING_LENGTH;
+
+    inet_aton(upipe_fisrc->senders_ip_str, &upipe_fisrc->dst.sin_addr);
+
+    memcpy(upipe_fisrc->senders_gid_array, buf, MAX_IPV6_GID_LENGTH);
+    buf += MAX_IPV6_GID_LENGTH;
+    n -= MAX_IPV6_GID_LENGTH;
+
+    char senders_stream_name_str[CDI_MAX_STREAM_NAME_STRING_LENGTH+1];
+    memcpy(senders_stream_name_str, buf, sizeof(senders_stream_name_str));
+    senders_stream_name_str[CDI_MAX_STREAM_NAME_STRING_LENGTH] = '\0';
+    buf += CDI_MAX_STREAM_NAME_STRING_LENGTH;
+    n -= CDI_MAX_STREAM_NAME_STRING_LENGTH;
+
+    if (v == 1) {
+        // senders_stream_identifier
+        buf += 4; // 32 bits
+        n -= 4;
+    }
+
+    uint16_t senders_control_dest_port = get_16le(buf);
+    buf += 2;
+    n -= 2;
+
+    upipe_fisrc->dst.sin_port = htons(senders_control_dest_port);
+
+    *pkt_num = get_16le(buf);
+    buf += 2;
+    n -= 2;
+
+    const uint8_t *csum_pos = buf;
+    uint16_t csum = get_16le(buf);
+    buf += 2;
+    n -= 2;
+
+    if (*command == kProbeCommandAck) {
+        uint8_t ack_command = get_32le(buf);
+        buf += 4;
+        n -= 4;
+        uint16_t ack_control_packet_num = get_16le(buf);
+        buf += 2;
+        n -= 2;
+
+        upipe_dbg_va(upipe, "ack cmd: %d - num %d\n", ack_command, ack_control_packet_num);
+    } else {
+        bool requires_ack = buf[0];
+        (void)requires_ack;
+        buf += 1;
+        n -= 1;
+    }
+
+    uint16_t checksum = CalculateChecksum(orig_buf, buf - orig_buf, csum_pos);
+    if (csum != checksum) {
+        upipe_err_va(upipe, "bad checksum 0x%.4x != 0x%.4x", csum, checksum);
+    }
+
+    upipe_dbg_va(upipe, "v%u.%u.%u %s senders ip %s - stream name %s - ctrl dst port %hu - pkt num %hu",
+            v, major, probe, get_cmd(*command),
+        upipe_fisrc->senders_ip_str, senders_stream_name_str, senders_control_dest_port, *pkt_num);
+}
 
 static int get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total)
 {
-    struct fi_cq_err_entry comp;
+    struct fi_cq_data_entry comp;
 
+    int z = 0;
     do {
         int ret = fi_cq_read (cq, &comp, 1);
         if (ret > 0) {
+            if (ret != 1)
+                printf("cq_read %d\n", ret);
             (*cur)++;
         } else if (ret == -FI_EAGAIN) {
+            if (z++ > 10)
+                return 1;
             continue;
         } else if (ret == -FI_EAVAIL) {
             (*cur)++;
@@ -211,8 +433,9 @@ static int get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total)
                 return ret;
             }
 
-            fprintf(stderr, "%s\n", fi_cq_strerror (cq, cq_err.prov_errno,
+            fprintf(stderr, "X %s\n", fi_cq_strerror (cq, cq_err.prov_errno,
                         cq_err.err_data, NULL, 0));
+            exit(1);
             return -cq_err.err;
         } else if (ret < 0) {
             fprintf(stderr, "%s(): ret=%d (%s)\n", "get_cq_comp", ret, fi_strerror(-ret));
@@ -223,31 +446,38 @@ static int get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total)
     return 0;
 }
 
-static ssize_t tx(struct upipe *upipe)
-{
-    struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
-    if (get_cq_comp (upipe_fisrc->txcq, &upipe_fisrc->tx_cq_cntr, upipe_fisrc->tx_seq))
-        return 1;
-
-    while (fi_send(upipe_fisrc->ep, upipe_fisrc->tx_buf, upipe_fisrc->transfer_size, fi_mr_desc (upipe_fisrc->mr), upipe_fisrc->remote_fi_addr, NULL))
-        ;
-
-    upipe_fisrc->tx_seq++;
-    return 0;
-}
-
 static ssize_t rx (struct upipe *upipe)
 {
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
+
     if (get_cq_comp (upipe_fisrc->rxcq, &upipe_fisrc->rx_cq_cntr, upipe_fisrc->rx_seq))
-        return 1;
+        return -1;
 
-    while (fi_recv(upipe_fisrc->ep, upipe_fisrc->rx_buf, upipe_fisrc->x_size, fi_mr_desc (upipe_fisrc->mr), 0, NULL))
-        ;
+    struct iovec msg_iov = {
+        .iov_base = (uint8_t*)upipe_fisrc->rx_buf + ++upipe_fisrc->nn * 8961,
+        .iov_len = 8961,
+    };
 
-    upipe_fisrc->rx_seq++;
+    if (upipe_fisrc->nn >= upipe_fisrc->x_size / 8961)
+        upipe_fisrc->nn = 0;
 
-    return 0;
+    struct fi_msg msg = {
+        .msg_iov = &msg_iov,
+        .desc = fi_mr_desc (upipe_fisrc->mr),
+        .iov_count = 1,
+        .addr = 0,
+        .context = NULL,
+        .data = 0,
+    };
+
+    ssize_t s = fi_recvmsg(upipe_fisrc->ep, &msg, 0);
+    if (!s)
+        upipe_fisrc->rx_seq++;
+    else {
+        upipe_err(upipe, "fi_recvmsg");
+    }
+
+    return msg_iov.iov_len;
 }
 
 #define RET(cmd)        \
@@ -270,6 +500,7 @@ static int alloc_msgs (struct upipe *upipe)
     size_t buf_size = upipe_fisrc->x_size * 2;
 
     assert(upipe_fisrc->x_size >= upipe_fisrc->transfer_size);
+    upipe_fisrc->nn = 0;
     ////////////////
 
     errno = 0;
@@ -287,11 +518,9 @@ static int alloc_msgs (struct upipe *upipe)
     upipe_fisrc->tx_buf =
         (void *) (((uintptr_t) upipe_fisrc->tx_buf + alignment - 1) & ~(alignment - 1));
 
-    if (fi->domain_attr->mr_mode & FI_MR_LOCAL)
-        RET(fi_mr_reg (upipe_fisrc->domain, upipe_fisrc->buf, buf_size,
-                FI_SEND | FI_RECV, 0, 0, 0, &upipe_fisrc->mr, NULL));
+    RET(fi_mr_reg (upipe_fisrc->domain, upipe_fisrc->buf, buf_size,
+            FI_SEND | FI_RECV | FI_MULTI_RECV, 0, 0, 0, &upipe_fisrc->mr, NULL));
 
-    upipe_fisrc->mr = &upipe_fisrc->no_mr;
     return 0;
 }
 
@@ -301,11 +530,10 @@ static int alloc_active_res (struct upipe *upipe)
     struct fi_info *fi = upipe_fisrc->fi;
     RET(alloc_msgs (upipe));
 
-    static struct fi_cq_attr cq_attr;
-    if (cq_attr.format == FI_CQ_FORMAT_UNSPEC)
-        cq_attr.format = FI_CQ_FORMAT_CONTEXT;
-
-    cq_attr.wait_obj = FI_WAIT_NONE;
+    struct fi_cq_attr cq_attr = {
+        .wait_obj = FI_WAIT_NONE,
+        .format = FI_CQ_FORMAT_DATA
+    };
 
     cq_attr.size = fi->tx_attr->size;
     RET(fi_cq_open (upipe_fisrc->domain, &cq_attr, &upipe_fisrc->txcq, &upipe_fisrc->txcq));
@@ -346,45 +574,41 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc_init_output(upipe);
     upipe_fisrc_init_upump_mgr(upipe);
     upipe_fisrc_init_upump(upipe);
+    upipe_fisrc_init_upump2(upipe);
     upipe_fisrc_init_uclock(upipe);
     upipe_fisrc_init_output_size(upipe, UBUF_DEFAULT_SIZE);
 
+    upipe_fisrc->rx_seq = 0;
+    upipe_fisrc->rx_cq_cntr = 0;
+    upipe_fisrc->output_uref = NULL;
+    upipe_fisrc->current_offset = 0;
+
     upipe_fisrc->max_msg_size = 0;
-    upipe_fisrc->transfer_size = 64;
 
     upipe_fisrc->src_port = FI_DEFAULT_PORT+1;
     upipe_fisrc->dst_port = FI_DEFAULT_PORT;
 
-    upipe_fisrc->max_msg_size = upipe_fisrc->transfer_size = 1024;
+    upipe_fisrc->max_msg_size = upipe_fisrc->transfer_size = 8961;
+    upipe_fisrc->ctrl_packet_num = 0;
 
     upipe_fisrc->hints = fi_allocinfo();
     if (!upipe_fisrc->hints) {
     }
 
     upipe_fisrc->hints->ep_attr->type = FI_EP_DGRAM;
+
     upipe_fisrc->hints->caps = FI_MSG;
     upipe_fisrc->hints->mode = FI_CONTEXT;
     upipe_fisrc->hints->domain_attr->mr_mode =
         FI_MR_LOCAL | FI_MR_ALLOCATED | FI_MR_PROV_KEY | FI_MR_VIRT_ADDR;
 
-    upipe_fisrc->hints->addr_format = AF_INET;
-    upipe_fisrc->hints->dest_addrlen = sizeof(struct sockaddr_in);
-    upipe_fisrc->hints->dest_addr = calloc (1, upipe_fisrc->hints->dest_addrlen);
-    upipe_fisrc->hints->src_addrlen = sizeof(struct sockaddr_in);
-    upipe_fisrc->hints->src_addr = calloc (1, upipe_fisrc->hints->src_addrlen);
-    struct sockaddr_in *s = upipe_fisrc->hints->src_addr;
-    *s = (struct sockaddr_in) {
-        .sin_family = AF_INET,
-        .sin_port = htons(upipe_fisrc->src_port),
-        .sin_addr = {
-            .s_addr = htonl(INADDR_LOOPBACK),
-        },
-    };
-    struct sockaddr_in *d = upipe_fisrc->hints->dest_addr;
-    *d = *s;
-    d->sin_port = htons(upipe_fisrc->dst_port);
+    upipe_fisrc->hints->fabric_attr->prov_name = (char*)"sockets";
+    upipe_fisrc->hints->ep_attr->type = FI_EP_RDM;
+    upipe_fisrc->hints->domain_attr->resource_mgmt = FI_RM_ENABLED;
+    upipe_fisrc->hints->domain_attr->threading = FI_THREAD_DOMAIN;
+    upipe_fisrc->hints->tx_attr->comp_order = FI_ORDER_NONE;
+    upipe_fisrc->hints->rx_attr->comp_order = FI_ORDER_NONE;
 
-//#define RET(x) x
     RET(fi_getinfo (FI_VERSION (FI_MAJOR_VERSION, FI_MINOR_VERSION),
             NULL, NULL, 0, upipe_fisrc->hints, &upipe_fisrc->fi));
 
@@ -396,9 +620,7 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     RET(fi_ep_bind(upipe_fisrc->ep, &upipe_fisrc->rxcq->fid, FI_RECV));
 
     RET(fi_enable (upipe_fisrc->ep));
-    RET(rx(upipe));
-
-    fi_av_insert(upipe_fisrc->av, upipe_fisrc->hints->dest_addr, 1, &upipe_fisrc->remote_fi_addr, 0, NULL);
+    rx(upipe);
 
     if (upipe_fisrc->hints->ep_attr->type == FI_EP_DGRAM) {
         if (upipe_fisrc->max_msg_size)
@@ -409,8 +631,310 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
         }
     }
 
+    upipe_fisrc->fd = -1;
+    upipe_fisrc->uri = NULL;
+    upipe_fisrc->dst.sin_family = AF_INET;
+
     upipe_throw_ready(upipe);
     return upipe;
+}
+
+static void transmit(struct upipe *upipe, ProbeCommand cmd, uint16_t pkt_num,
+        bool requires_ack, ProbeCommand reply, char *ip)
+{
+    struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
+
+    uint8_t *tx_buf = upipe_fisrc->tx_buf;
+    memset(tx_buf, 0, 300);
+    uint8_t *buf = tx_buf;
+
+    // senders_version
+    *buf++ = 2;
+    *buf++ = 1;
+    *buf++ = 4;
+
+    // ProbeCommand
+    put_32le(buf, cmd);
+    buf += 4;
+
+    // senders_ip_str
+    if (ip)
+        strncpy((char*)buf, ip, MAX_IP_STRING_LENGTH - 1);
+    buf[MAX_IP_STRING_LENGTH - 1] = '\0';
+
+    buf += MAX_IP_STRING_LENGTH;
+
+    // senders_gid_array
+    uint8_t ipv6_gid[MAX_IPV6_GID_LENGTH];
+
+    size_t name_length = MAX_IPV6_GID_LENGTH;
+
+    int ret = fi_getname(&upipe_fisrc->ep->fid, (void*)ipv6_gid, &name_length);
+    if (ret) {
+        upipe_err(upipe, "CRAP");
+    } else {
+        memset(buf, 0, MAX_IPV6_GID_LENGTH);
+        memcpy(buf, ipv6_gid, name_length);
+    }
+
+    buf += MAX_IPV6_GID_LENGTH;
+
+    // senders_stream_name_str
+    buf += CDI_MAX_STREAM_NAME_STRING_LENGTH;
+
+    // senders_control_dest_port
+    uint16_t port = 47593; // TODO
+    put_16le(buf, port);
+    buf += 2;
+
+    // control_packet_num
+    put_16le(buf, upipe_fisrc->ctrl_packet_num++);
+    buf += 2;
+
+    // checksum
+    uint8_t *csum = buf; /* written later */
+    put_16le(buf, 0);
+    buf += 2;
+
+    if (cmd == kProbeCommandAck) {
+        // ack_command
+        put_32le(buf, reply);
+        buf += 4;
+
+        // ack_control_packet_num
+        put_16le(buf, pkt_num);
+        buf += 2;
+    } else {
+        // requires_ack
+        *buf++ = !!requires_ack;
+    }
+
+    size_t n = buf - tx_buf;
+
+    uint16_t checksum = CalculateChecksum(tx_buf, n, NULL);
+
+    put_16le(csum, checksum);
+    ssize_t ss = sendto(upipe_fisrc->fd, tx_buf, n, 0, (struct sockaddr*)&upipe_fisrc->dst, sizeof(upipe_fisrc->dst));
+    if (ss < 0)
+        perror("sendto");
+}
+
+typedef enum {
+    kPayloadTypeData = 0,   ///< Payload contains application payload data.
+    kPayloadTypeDataOffset, ///< Payload contains application payload data with data offset field in each packet.
+    kPayloadTypeProbe,      ///< Payload contains probe data.
+    kPayloadTypeKeepAlive,  ///< Payload is being used for keeping the connection alive (don't use app payload
+                            ///  callbacks).
+} CdiPayloadType;
+
+static const char *get_pt(int pt)
+{
+    static const char *foo[] = {
+        [kPayloadTypeData] = "Data",
+        [kPayloadTypeDataOffset] = "DataOffset",
+        [kPayloadTypeProbe] = "Probe",
+        [kPayloadTypeKeepAlive] = "KeepAlive",
+    };
+
+    if (pt < kPayloadTypeData || pt > kPayloadTypeKeepAlive)
+        return "?";
+
+    return foo[pt];
+}
+
+/** @internal @This reads data from the source and outputs it.
+ * It is called either when the idler triggers (permanent storage mode) or
+ * when data is available on the udp socket descriptor (live stream mode).
+ *
+ * @param upump description structure of the read watcher
+ */
+static void upipe_fisrc_worker2(struct upump *upump)
+{
+    struct upipe *upipe = upump_get_opaque(upump, struct upipe *);
+    struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
+    uint64_t systime = 0; /* to keep gcc quiet */
+    if (unlikely(upipe_fisrc->uclock != NULL))
+        systime = uclock_now(upipe_fisrc->uclock);
+    struct uref *uref = upipe_fisrc->output_uref;
+
+    if (unlikely(uref == NULL)) {
+        uref = uref_pic_alloc(upipe_fisrc->uref_mgr, upipe_fisrc->ubuf_mgr, 1920, 1080);
+        if (unlikely(uref == NULL)) {
+            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+            upipe_err(upipe, "FATAL");
+            return;
+        }
+        upipe_fisrc->output_uref = uref;
+        uref_clock_set_cr_sys(uref, systime);
+        uref_clock_set_pts_prog(uref, systime);
+        upipe_throw_clock_ref(upipe, uref, systime, 0);
+        upipe_throw_clock_ts(upipe, uref);
+    }
+
+    uint16_t *y, *u, *v;
+    if (!ubase_check(uref_pic_plane_write(uref, "y10l", 0, 0, -1, -1, (uint8_t**)&y))) {
+        upipe_err(upipe, "Cannot map y");
+    }
+    if (!ubase_check(uref_pic_plane_write(uref, "u10l", 0, 0, -1, -1, (uint8_t**)&u))) {
+        upipe_err(upipe, "Cannot map u");
+    }
+    if (!ubase_check(uref_pic_plane_write(uref, "v10l", 0, 0, -1, -1, (uint8_t**)&v))) {
+        upipe_err(upipe, "Cannot map v");
+    }
+
+    size_t offset = 0;
+    uint8_t *buffer = upipe_fisrc->rx_buf;
+    buffer += upipe_fisrc->nn * 8961;
+    ssize_t s = rx(upipe);
+    size_t orig_s = 0;
+    if (s <= 0)
+        goto skip;
+
+    assert(s >= 9);
+
+    if (0) {
+        int m = 0;
+        for (int i = 0; i < s; i++) {
+            printf("%.2x", buffer[i]);
+            m++;
+            if ((i & 31) == 31)
+                if (m) {
+                    printf("\n");
+                    m = 0;
+                }
+        }
+        if (m)
+            printf("\n");
+    }
+
+    uint8_t pt = buffer[0];
+    uint16_t seq = get_16le(&buffer[1]);
+    uint16_t num = get_16le(&buffer[3]);
+    uint32_t id = get_32le(&buffer[5]);
+    if (pt != kPayloadTypeDataOffset && pt != kPayloadTypeProbe && pt != kPayloadTypeData)
+        upipe_dbg_va(upipe, "PT %s(%d) - seq %d num %d id %d", get_pt(pt), pt, seq, num, id);
+
+    buffer += 9;
+    s -= 9;
+
+    switch(pt) {
+    case kPayloadTypeData:
+        if (seq == 0) {
+            assert(s >= 4+8+8+8+2+8);
+            uint32_t total_payload_size = get_32le(buffer); buffer += 4;
+            uint64_t max_latency_microsecs = get_64le(buffer); buffer += 8;
+            uint32_t sec = get_32le(buffer); buffer += 4; /// The number of seconds since the SMPTE Epoch which is 1970-01-01T00:00:00.
+            uint32_t nsec = get_32le(buffer); buffer += 4; /// The number of fractional seconds as measured in nanoseconds. The value in this field is always less than 10^9.
+            uint64_t payload_user_data = get_64le(buffer); buffer += 8;
+
+            uint16_t  extra_data_size = get_16le(buffer); buffer += 2;
+            uint64_t tx_start_time_microseconds = get_64le(buffer); buffer += 8;
+            upipe_dbg_va(upipe,
+                    "total payload size %u max latency usecs %" PRId64 " PTP %u.%09u userdata %" PRIx64 " extradata %d tx_start_time_usec %" PRId64,
+
+                    total_payload_size,
+                    max_latency_microsecs,
+                    sec,
+                    nsec,
+                    payload_user_data,
+                    extra_data_size,
+                    tx_start_time_microseconds);
+
+            s -= 4+8+8+8+2+8;
+
+            assert (s >= extra_data_size);
+            s -= extra_data_size;
+            char foo[extra_data_size+1];
+            memcpy(foo, buffer, extra_data_size);
+            foo[extra_data_size] = '\0';
+            if (extra_data_size >= 259) {
+                printf("%s\n", &foo[2]);
+                printf("%s\n", &foo[259]);
+            }
+            buffer += extra_data_size;
+        }
+        break;
+
+    case kPayloadTypeDataOffset:
+        assert(s >= 4);
+        offset = get_32le(buffer);
+        buffer += 4; s -= 4;
+        //printf("%zu\t%zd\n", offset, s);
+        break;
+    case kPayloadTypeKeepAlive:
+        break;
+    case kPayloadTypeProbe:
+        s = 0;
+    default: break;
+    }
+
+    static size_t offoff;
+    if (s)
+        while (*buffer != 0x1c) { buffer++; s--; }
+    orig_s = s;
+    offset = offoff;
+
+    if (offset + s >= 5184000)
+        s = 5184000 - offset;
+
+    if (1) {
+        uint8_t *src = buffer;
+        int i = offset * 2 / 5;
+
+        while (s >= 5) {
+            uint8_t a = *src++;
+            uint8_t b = *src++;
+            uint8_t c = *src++;
+            uint8_t d = *src++;
+            uint8_t e = *src++;
+            u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
+            y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
+            v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
+            y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
+
+            i += 2;
+            s -= 5;
+        }
+    }
+    offoff += orig_s;
+
+skip:
+
+    if (offoff >= 5184000) {
+        printf("%zu\n", offoff);
+        offoff = 0;
+        if (0){
+            FILE *f = fopen("dump.raw", "w");
+            fwrite(y, 1920*1080*2, 1, f);
+            fwrite(u, 1920*1080, 1, f);
+            fwrite(v, 1920*1080, 1, f);
+            fclose(f);
+            exit(1);
+        }
+    }
+
+    uref_pic_plane_unmap(uref, "y10l", 0, 0, -1, -1);
+    uref_pic_plane_unmap(uref, "u10l", 0, 0, -1, -1);
+    uref_pic_plane_unmap(uref, "v10l", 0, 0, -1, -1);
+
+static struct uref *xx;
+
+    if (orig_s && offoff == 0) {
+        upipe_fisrc->output_uref = NULL;
+        if (xx)
+            uref_free(xx);
+        xx = uref_dup(uref);
+        upipe_fisrc_output(upipe, uref, &upipe_fisrc->upump);
+        upipe_notice_va(upipe, "PIC OUT orig %zu", orig_s);
+    }
+
+    if (xx) {
+        static uint8_t z;
+        if ((++z & 0xf) == 0xf) {
+            upipe_fisrc_output(upipe, uref_dup(xx), &upipe_fisrc->upump);
+//            upipe_notice_va(upipe, "out dup");
+        }
+    }
 }
 
 /** @internal @This reads data from the source and outputs it.
@@ -423,43 +947,22 @@ static void upipe_fisrc_worker(struct upump *upump)
 {
     struct upipe *upipe = upump_get_opaque(upump, struct upipe *);
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
-    uint64_t systime = 0; /* to keep gcc quiet */
-    if (unlikely(upipe_fisrc->uclock != NULL))
-        systime = uclock_now(upipe_fisrc->uclock);
 
-    struct uref *uref = uref_block_alloc(upipe_fisrc->uref_mgr,
-                                         upipe_fisrc->ubuf_mgr,
-                                         upipe_fisrc->output_size);
-    if (unlikely(uref == NULL)) {
-        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
-        return;
-    }
+    uint8_t buffer[1500];
 
-    rx(upipe);
-    tx(upipe);
-
-    uint8_t *buffer;
-    int output_size = -1;
-    if (unlikely(!ubase_check(uref_block_write(uref, 0, &output_size,
-                                               &buffer)))) {
-        uref_free(uref);
-        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
-        return;
-    }
-    assert(output_size == upipe_fisrc->output_size);
-
-    int ret = -1;
-
-#if 0
     struct sockaddr_storage addr;
     socklen_t addrlen = sizeof(addr);
 
-    ssize_t ret = recvfrom(upipe_fisrc->fd, buffer, upipe_fisrc->output_size,
-                        0, (struct sockaddr*)&addr, &addrlen);
-    uref_block_unmap(uref, 0);
+    ssize_t ret = recvfrom(upipe_fisrc->fd, buffer, sizeof(buffer),
+           0, (struct sockaddr*)&addr, &addrlen);
+
+    char *ip = NULL;
+    if (addr.ss_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in*)&addr;
+        ip = inet_ntoa(s->sin_addr);
+    }
 
     if (unlikely(ret == -1)) {
-        uref_free(uref);
         switch (errno) {
             case EINTR:
             case EAGAIN:
@@ -479,10 +982,8 @@ static void upipe_fisrc_worker(struct upump *upump)
         upipe_throw_source_end(upipe);
         return;
     }
-    #endif
 
     if (unlikely(ret == 0)) {
-        uref_free(uref);
         if (likely(upipe_fisrc->uclock == NULL)) {
             upipe_notice_va(upipe, "end of udp socket");
             upipe_fisrc_set_upump(upipe, NULL);
@@ -490,11 +991,14 @@ static void upipe_fisrc_worker(struct upump *upump)
         }
         return;
     }
-    if (unlikely(upipe_fisrc->uclock != NULL))
-        uref_clock_set_cr_sys(uref, systime);
-    if (unlikely(ret != upipe_fisrc->output_size))
-        uref_block_resize(uref, 0, ret);
-    upipe_fisrc_output(upipe, uref, &upipe_fisrc->upump);
+
+    ProbeCommand cmd;
+    uint16_t pkt_num;
+    upipe_fisrc_parse_cmd(upipe, buffer, ret, &cmd, &pkt_num);
+
+    transmit(upipe, kProbeCommandAck, pkt_num, false, cmd, ip);
+    if (cmd == kProbeCommandProtocolVersion)
+        transmit(upipe, kProbeCommandConnected, pkt_num, false, 0, ip);
 }
 
 /** @internal @This checks if the pump may be allocated.
@@ -519,13 +1023,16 @@ static int upipe_fisrc_check(struct upipe *upipe, struct uref *flow_format)
     }
 
     if (upipe_fisrc->ubuf_mgr == NULL) {
-        struct uref *flow_format =
-            uref_block_flow_alloc_def(upipe_fisrc->uref_mgr, NULL);
-        uref_block_flow_set_size(flow_format, upipe_fisrc->output_size);
+        struct uref *flow_format = uref_pic_flow_alloc_yuv422p10le(upipe_fisrc->uref_mgr);
         if (unlikely(flow_format == NULL)) {
             upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
             return UBASE_ERR_ALLOC;
         }
+        UBASE_RETURN(uref_pic_flow_set_hsize(flow_format, 1920));
+        UBASE_RETURN(uref_pic_flow_set_vsize(flow_format, 1080));
+        struct urational fps = { 1, 1 };
+        UBASE_RETURN(uref_pic_flow_set_fps(flow_format, fps));
+
         upipe_fisrc_require_ubuf_mgr(upipe, flow_format);
         return UBASE_ERR_NONE;
     }
@@ -536,9 +1043,10 @@ static int upipe_fisrc_check(struct upipe *upipe, struct uref *flow_format)
         return UBASE_ERR_NONE;
 
     if (upipe_fisrc->upump == NULL) {
-        struct upump *upump = upump_alloc_timer(upipe_fisrc->upump_mgr,
+        struct upump *upump = upump_alloc_fd_read(upipe_fisrc->upump_mgr,
                                     upipe_fisrc_worker, upipe, upipe->refcount,
-                                    0, 1/*UCLOCK_FREQ / 1000*/);
+                                    upipe_fisrc->fd);
+
         if (unlikely(upump == NULL)) {
             upipe_throw_fatal(upipe, UBASE_ERR_UPUMP);
             return UBASE_ERR_UPUMP;
@@ -547,6 +1055,72 @@ static int upipe_fisrc_check(struct upipe *upipe, struct uref *flow_format)
         upump_start(upump);
     }
 
+    if (upipe_fisrc->upump2 == NULL) {
+        struct upump *upump = upump_alloc_timer(upipe_fisrc->upump_mgr,
+                upipe_fisrc_worker2, upipe, upipe->refcount,
+                0, UCLOCK_FREQ / 1000);
+
+        if (unlikely(upump == NULL)) {
+            upipe_throw_fatal(upipe, UBASE_ERR_UPUMP);
+            return UBASE_ERR_UPUMP;
+        }
+        upipe_fisrc_set_upump2(upipe, upump);
+        upump_start(upump);
+    }
+    return UBASE_ERR_NONE;
+}
+
+/** @internal @This returns the uri of the currently opened udp socket.
+ *
+ * @param upipe description structure of the pipe
+ * @param uri_p filled in with the uri of the udp socket
+ * @return an error code
+ */
+static int upipe_fisrc_get_uri(struct upipe *upipe, const char **uri_p)
+{
+    struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
+    assert(uri_p != NULL);
+    *uri_p = upipe_fisrc->uri;
+    return UBASE_ERR_NONE;
+}
+
+/** @internal @This asks to open the given udp socket.
+ *
+ * @param upipe description structure of the pipe
+ * @param uri relative or absolute uri of the udp socket
+ * @return an error code
+ */
+static int upipe_fisrc_set_uri(struct upipe *upipe, const char *uri)
+{
+    bool use_tcp = 0;
+    struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
+
+    if (unlikely(upipe_fisrc->fd != -1)) {
+        if (likely(upipe_fisrc->uri != NULL)) {
+            upipe_notice_va(upipe, "closing udp socket %s", upipe_fisrc->uri);
+        }
+        ubase_clean_fd(&upipe_fisrc->fd);
+    }
+    ubase_clean_str(&upipe_fisrc->uri);
+    upipe_fisrc_set_upump(upipe, NULL);
+
+    if (unlikely(uri == NULL))
+        return UBASE_ERR_NONE;
+
+    upipe_fisrc->fd = upipe_udp_open_socket(upipe, uri,
+            UDP_DEFAULT_TTL, FI_DEFAULT_PORT, 0, NULL, &use_tcp, NULL, NULL);
+    if (unlikely(upipe_fisrc->fd == -1)) {
+        upipe_err_va(upipe, "can't open udp socket %s (%m)", uri);
+        return UBASE_ERR_EXTERNAL;
+    }
+
+    upipe_fisrc->uri = strdup(uri);
+    if (unlikely(upipe_fisrc->uri == NULL)) {
+        ubase_clean_fd(&upipe_fisrc->fd);
+        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+        return UBASE_ERR_ALLOC;
+    }
+    upipe_notice_va(upipe, "opening udp socket %s", upipe_fisrc->uri);
     return UBASE_ERR_NONE;
 }
 
@@ -578,7 +1152,14 @@ static int _upipe_fisrc_control(struct upipe *upipe,
         case UPIPE_SET_OUTPUT_SIZE:
             return upipe_fisrc_control_output_size(upipe, command, args);
 
-        case UPIPE_SET_URI: return UBASE_ERR_NONE; // XXXXX
+        case UPIPE_GET_URI: {
+            const char **uri_p = va_arg(args, const char **);
+            return upipe_fisrc_get_uri(upipe, uri_p);
+        }
+        case UPIPE_SET_URI: {
+            const char *uri = va_arg(args, const char *);
+            return upipe_fisrc_set_uri(upipe, uri);
+        }
 
         default:
             return UBASE_ERR_UNHANDLED;
@@ -635,8 +1216,7 @@ static void upipe_fisrc_free(struct upipe *upipe)
     if (upipe_fisrc->upump != NULL)
         upump_stop(upipe_fisrc->upump);
 
-    if (upipe_fisrc->mr != &upipe_fisrc->no_mr)
-        fi_close(&upipe_fisrc->mr->fid);
+    fi_close(&upipe_fisrc->mr->fid);
     fi_close(&upipe_fisrc->ep->fid);
     fi_close(&upipe_fisrc->rxcq->fid);
     fi_close(&upipe_fisrc->txcq->fid);
@@ -654,6 +1234,7 @@ static void upipe_fisrc_free(struct upipe *upipe)
 
     upipe_fisrc_clean_output_size(upipe);
     upipe_fisrc_clean_uclock(upipe);
+    upipe_fisrc_clean_upump2(upipe);
     upipe_fisrc_clean_upump(upipe);
     upipe_fisrc_clean_upump_mgr(upipe);
     upipe_fisrc_clean_output(upipe);
