@@ -999,6 +999,8 @@ static void upipe_fisrc_worker(struct upump *upump)
     transmit(upipe, kProbeCommandAck, pkt_num, false, cmd, ip);
     if (cmd == kProbeCommandProtocolVersion)
         transmit(upipe, kProbeCommandConnected, pkt_num, false, 0, ip);
+
+    usleep(100000);
 }
 
 /** @internal @This checks if the pump may be allocated.
