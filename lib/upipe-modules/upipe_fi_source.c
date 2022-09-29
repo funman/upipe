@@ -123,6 +123,13 @@
 /** @hidden */
 static int upipe_fisrc_check(struct upipe *upipe, struct uref *flow_format);
 
+typedef enum {
+    kProbeStateIdle, // Waiting for ProtocolVersion
+    kProbeStateEfaProbe, // Got ProtocolVersion, waiting for probe packets through EFA
+    kProbeStateEfaTxProbeAcks, // Received probe packets, sends Connected
+    kProbeStateEfaConnected, // Connected
+} ProbeState;
+
 /** @internal @This is the private context of a udp socket source pipe. */
 struct upipe_fisrc {
     /** refcount management structure */
@@ -200,6 +207,10 @@ struct upipe_fisrc {
 
     struct uref *output_uref;
     size_t current_offset;
+
+    ProbeState probe_state;
+    uint16_t pkt_num;
+    char ip[INET6_ADDRSTRLEN];
 
     /** public upipe structure */
     struct upipe upipe;
@@ -327,7 +338,7 @@ static uint16_t CalculateChecksum(const uint8_t *buf, int size, const uint8_t *c
     return (uint16_t)(~cksum);
 }
 
-static void upipe_fisrc_parse_cmd(struct upipe *upipe, const uint8_t *buf, size_t n, ProbeCommand *command, uint16_t *pkt_num)
+static void upipe_fisrc_parse_cmd(struct upipe *upipe, const uint8_t *buf, size_t n, ProbeCommand *command)
 {
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
     const uint8_t *orig_buf = buf;
@@ -373,7 +384,7 @@ static void upipe_fisrc_parse_cmd(struct upipe *upipe, const uint8_t *buf, size_
 
     upipe_fisrc->dst.sin_port = htons(senders_control_dest_port);
 
-    *pkt_num = get_16le(buf);
+    upipe_fisrc->pkt_num = get_16le(buf);
     buf += 2;
     n -= 2;
 
@@ -405,7 +416,7 @@ static void upipe_fisrc_parse_cmd(struct upipe *upipe, const uint8_t *buf, size_
 
     upipe_dbg_va(upipe, "v%u.%u.%u %s senders ip %s - stream name %s - ctrl dst port %hu - pkt num %hu",
             v, major, probe, get_cmd(*command),
-        upipe_fisrc->senders_ip_str, senders_stream_name_str, senders_control_dest_port, *pkt_num);
+        upipe_fisrc->senders_ip_str, senders_stream_name_str, senders_control_dest_port, upipe_fisrc->pkt_num);
 }
 
 static int get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total)
@@ -635,12 +646,15 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->uri = NULL;
     upipe_fisrc->dst.sin_family = AF_INET;
 
+    upipe_fisrc->probe_state = kProbeStateIdle;
+    upipe_fisrc->pkt_num = 0;
+    upipe_fisrc->ip[0] = '\0';
+
     upipe_throw_ready(upipe);
     return upipe;
 }
 
-static void transmit(struct upipe *upipe, ProbeCommand cmd, uint16_t pkt_num,
-        bool requires_ack, ProbeCommand reply, char *ip)
+static void transmit(struct upipe *upipe, ProbeCommand cmd, bool requires_ack, ProbeCommand reply)
 {
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
 
@@ -658,8 +672,7 @@ static void transmit(struct upipe *upipe, ProbeCommand cmd, uint16_t pkt_num,
     buf += 4;
 
     // senders_ip_str
-    if (ip)
-        strncpy((char*)buf, ip, MAX_IP_STRING_LENGTH - 1);
+    strncpy((char*)buf, upipe_fisrc->ip, MAX_IP_STRING_LENGTH - 1);
     buf[MAX_IP_STRING_LENGTH - 1] = '\0';
 
     buf += MAX_IP_STRING_LENGTH;
@@ -702,7 +715,7 @@ static void transmit(struct upipe *upipe, ProbeCommand cmd, uint16_t pkt_num,
         buf += 4;
 
         // ack_control_packet_num
-        put_16le(buf, pkt_num);
+        put_16le(buf, upipe_fisrc->pkt_num);
         buf += 2;
     } else {
         // requires_ack
@@ -864,6 +877,12 @@ static void upipe_fisrc_worker2(struct upump *upump)
     case kPayloadTypeKeepAlive:
         break;
     case kPayloadTypeProbe:
+        if (upipe_fisrc->probe_state == kProbeStateEfaProbe) {
+            /* Don't wait for an arbitrary number of packets (EFA_PROBE_PACKET_COUNT) */
+            upipe_fisrc->probe_state = kProbeStateEfaTxProbeAcks;
+            transmit(upipe, kProbeCommandConnected, false, 0);
+        }
+
         s = 0;
     default: break;
     }
@@ -956,10 +975,12 @@ static void upipe_fisrc_worker(struct upump *upump)
     ssize_t ret = recvfrom(upipe_fisrc->fd, buffer, sizeof(buffer),
            0, (struct sockaddr*)&addr, &addrlen);
 
-    char *ip = NULL;
-    if (addr.ss_family == AF_INET) {
+    if (addr.ss_family == AF_INET || addr.ss_family == AF_INET6) {
         struct sockaddr_in *s = (struct sockaddr_in*)&addr;
-        ip = inet_ntoa(s->sin_addr);
+        struct sockaddr_in6 *s6 = (struct sockaddr_in6*)&addr;
+        void *src = addr.ss_family == AF_INET ? (void*)&s->sin_addr : (void*)&s6->sin6_addr;
+        if (inet_ntop(addr.ss_family, src, upipe_fisrc->ip, sizeof(upipe_fisrc->ip)))
+            upipe_fisrc->ip[0] = '\0';
     }
 
     if (unlikely(ret == -1)) {
@@ -993,14 +1014,13 @@ static void upipe_fisrc_worker(struct upump *upump)
     }
 
     ProbeCommand cmd;
-    uint16_t pkt_num;
-    upipe_fisrc_parse_cmd(upipe, buffer, ret, &cmd, &pkt_num);
+    upipe_fisrc_parse_cmd(upipe, buffer, ret, &cmd);
 
-    transmit(upipe, kProbeCommandAck, pkt_num, false, cmd, ip);
+    transmit(upipe, kProbeCommandAck, false, cmd);
     if (cmd == kProbeCommandProtocolVersion)
-        transmit(upipe, kProbeCommandConnected, pkt_num, false, 0, ip);
-
-    usleep(100000);
+        upipe_fisrc->probe_state = kProbeStateEfaProbe;
+    if (cmd == kProbeCommandPing)
+        upipe_fisrc->probe_state = kProbeStateEfaConnected;
 }
 
 /** @internal @This checks if the pump may be allocated.
