@@ -1249,8 +1249,7 @@ static void upipe_fisrc_free(struct upipe *upipe)
     free (upipe_fisrc->buf);
 
     fi_freeinfo (upipe_fisrc->fi);
-    fi_freeinfo (upipe_fisrc->hints);
-
+//    fi_freeinfo (upipe_fisrc->hints); // FIXME
 
     upipe_throw_dead(upipe);
 
