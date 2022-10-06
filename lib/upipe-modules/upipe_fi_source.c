@@ -206,11 +206,13 @@ struct upipe_fisrc {
     char senders_ip_str[MAX_IP_STRING_LENGTH+1];
 
     struct uref *output_uref;
-    size_t current_offset;
 
     ProbeState probe_state;
     uint16_t pkt_num;
     char ip[INET6_ADDRSTRLEN];
+
+    uint8_t buffer[5];
+    size_t  buffered;
 
     /** public upipe structure */
     struct upipe upipe;
@@ -592,7 +594,6 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->rx_seq = 0;
     upipe_fisrc->rx_cq_cntr = 0;
     upipe_fisrc->output_uref = NULL;
-    upipe_fisrc->current_offset = 0;
 
     upipe_fisrc->max_msg_size = 0;
 
@@ -649,6 +650,7 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->probe_state = kProbeStateIdle;
     upipe_fisrc->pkt_num = 0;
     upipe_fisrc->ip[0] = '\0';
+    upipe_fisrc->buffered = 0;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -795,30 +797,16 @@ static void upipe_fisrc_worker2(struct upump *upump)
         upipe_err(upipe, "Cannot map v");
     }
 
-    size_t offset = 0;
     uint8_t *buffer = upipe_fisrc->rx_buf;
-    buffer += upipe_fisrc->nn * 8961;
+    buffer += upipe_fisrc->nn * 8961; // something to do with jumbo
     ssize_t s = rx(upipe);
-    size_t orig_s = 0;
+
+    size_t offset = 0;
     if (s <= 0)
         goto skip;
 
     assert(s >= 9);
-
-    if (0) {
-        int m = 0;
-        for (int i = 0; i < s; i++) {
-            printf("%.2x", buffer[i]);
-            m++;
-            if ((i & 31) == 31)
-                if (m) {
-                    printf("\n");
-                    m = 0;
-                }
-        }
-        if (m)
-            printf("\n");
-    }
+    assert(s == 8961);
 
     uint8_t pt = buffer[0];
     uint16_t seq = get_16le(&buffer[1]);
@@ -855,14 +843,15 @@ static void upipe_fisrc_worker2(struct upump *upump)
 
             s -= 4+8+8+8+2+8;
 
+            // TODO: this is flow def
             assert (s >= extra_data_size);
             s -= extra_data_size;
             char foo[extra_data_size+1];
             memcpy(foo, buffer, extra_data_size);
             foo[extra_data_size] = '\0';
             if (extra_data_size >= 259) {
-                printf("%s\n", &foo[2]);
-                printf("%s\n", &foo[259]);
+                printf("XTRA %s\n", &foo[2]);
+                printf("XTRA2 %s\n", &foo[259]);
             }
             buffer += extra_data_size;
         }
@@ -872,7 +861,6 @@ static void upipe_fisrc_worker2(struct upump *upump)
         assert(s >= 4);
         offset = get_32le(buffer);
         buffer += 4; s -= 4;
-        //printf("%zu\t%zd\n", offset, s);
         break;
     case kPayloadTypeKeepAlive:
         break;
@@ -887,72 +875,101 @@ static void upipe_fisrc_worker2(struct upump *upump)
     default: break;
     }
 
-    static size_t offoff;
-    if (s)
-        while (*buffer != 0x1c) { buffer++; s--; }
-    orig_s = s;
-    offset = offoff;
+    offset -= (offset % 5);
 
-    if (offset + s >= 5184000)
-        s = 5184000 - offset;
-
-    if (1) {
-        uint8_t *src = buffer;
-        int i = offset * 2 / 5;
-
-        while (s >= 5) {
-            uint8_t a = *src++;
-            uint8_t b = *src++;
-            uint8_t c = *src++;
-            uint8_t d = *src++;
-            uint8_t e = *src++;
-            u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
-            y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
-            v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
-            y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
-
-            i += 2;
-            s -= 5;
-        }
+    if (offset + upipe_fisrc->buffered + s > 5184000) {
+        if (offset + upipe_fisrc->buffered + s > 5184000 + 8191)
+        upipe_err_va(upipe, "OVERFLOW offset %zu, s %zu buffered %zu", offset, s, upipe_fisrc->buffered);
+        s = 5184000 - offset - upipe_fisrc->buffered;
     }
-    offoff += orig_s;
+
+
+    if (0 && s) {
+        bool c = false;
+        static int x;
+        static FILE *f;
+        if (!f) {
+            f = fopen("/home/fun/dump.c", "w");
+            assert(f);
+        }
+        if (c)
+            fprintf(f, "pkt_%d[%zu] = {\n", x++, s);
+
+        int m = 0;
+        for (unsigned i = 0; i < s; i++) {
+            if (c)
+                fprintf(f, "0x%.2x, ", buffer[i]);
+            else
+                fputc(buffer[i], f);
+            if (c && ++m && (i & 15) == 15) {
+                fprintf(f, "\n");
+                m = 0;
+            }
+        }
+        if (c) {
+            if (m)
+                fprintf(f, "\n");
+
+            fprintf(f, "};\n");
+        }
+        fflush(f);
+    }
+
+    uint8_t *src = buffer;
+    int i = offset / 5 * 2;
+
+    if (upipe_fisrc->buffered && s >= 5 - upipe_fisrc->buffered) {
+        memcpy(&upipe_fisrc->buffer[upipe_fisrc->buffered], src, 5 - upipe_fisrc->buffered);
+        src += 5 - upipe_fisrc->buffered;
+
+        uint8_t a = upipe_fisrc->buffer[0];
+        uint8_t b = upipe_fisrc->buffer[1];
+        uint8_t c = upipe_fisrc->buffer[2];
+        uint8_t d = upipe_fisrc->buffer[3];
+        uint8_t e = upipe_fisrc->buffer[4];
+        u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
+        y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
+        v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
+        y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
+
+        i += 2;
+        s -= 5 - upipe_fisrc->buffered;
+        offset += 5;
+    }
+
+    while (s >= 5) {
+        uint8_t a = *src++;
+        uint8_t b = *src++;
+        uint8_t c = *src++;
+        uint8_t d = *src++;
+        uint8_t e = *src++;
+        u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
+        y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
+        v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
+        y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
+
+        i += 2;
+        s -= 5;
+        offset += 5;
+    }
+
+    upipe_fisrc->buffered = s;
+    if (s)
+        memcpy(upipe_fisrc->buffer, src, s);
 
 skip:
-
-    if (offoff >= 5184000) {
-        printf("%zu\n", offoff);
-        offoff = 0;
-        if (0){
-            FILE *f = fopen("dump.raw", "w");
-            fwrite(y, 1920*1080*2, 1, f);
-            fwrite(u, 1920*1080, 1, f);
-            fwrite(v, 1920*1080, 1, f);
-            fclose(f);
-            exit(1);
-        }
-    }
 
     uref_pic_plane_unmap(uref, "y10l", 0, 0, -1, -1);
     uref_pic_plane_unmap(uref, "u10l", 0, 0, -1, -1);
     uref_pic_plane_unmap(uref, "v10l", 0, 0, -1, -1);
 
-static struct uref *xx;
-
-    if (orig_s && offoff == 0) {
+    if (offset >= 5184000) {
+        if (offset > 5184000)
+            upipe_err_va(upipe, "%zu too big", offset - 5184000);
+        offset = 0;
+        upipe_fisrc->buffered = 0;
         upipe_fisrc->output_uref = NULL;
-        if (xx)
-            uref_free(xx);
-        xx = uref_dup(uref);
         upipe_fisrc_output(upipe, uref, &upipe_fisrc->upump);
-        upipe_notice_va(upipe, "PIC OUT orig %zu", orig_s);
-    }
-
-    if (xx) {
-        static uint8_t z;
-        if ((++z & 0xf) == 0xf) {
-            upipe_fisrc_output(upipe, uref_dup(xx), &upipe_fisrc->upump);
-//            upipe_notice_va(upipe, "out dup");
-        }
     }
 }
 
@@ -1052,7 +1069,7 @@ static int upipe_fisrc_check(struct upipe *upipe, struct uref *flow_format)
         }
         UBASE_RETURN(uref_pic_flow_set_hsize(flow_format, 1920));
         UBASE_RETURN(uref_pic_flow_set_vsize(flow_format, 1080));
-        struct urational fps = { 1, 1 };
+        struct urational fps = { 10, 1 };
         UBASE_RETURN(uref_pic_flow_set_fps(flow_format, fps));
 
         upipe_fisrc_require_ubuf_mgr(upipe, flow_format);
