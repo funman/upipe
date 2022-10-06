@@ -46,6 +46,7 @@
 #include <upipe/udict_inline.h>
 #include <upipe/uref.h>
 #include <upipe/uref_std.h>
+#include <upipe/uref_block_flow.h>
 #include <upipe/uref_pic_flow.h>
 #include <upipe/uref_sound_flow.h>
 #include <upipe/uclock.h>
@@ -57,6 +58,7 @@
 #include <upipe-pthread/umutex_pthread.h>
 #include <upump-ev/upump_ev.h>
 #include <upipe-modules/upipe_file_source.h>
+#include <upipe-modules/upipe_file_sink.h>
 #include <upipe-modules/upipe_udp_source.h>
 #include <upipe-modules/upipe_fi_source.h>
 #include <upipe-modules/upipe_rtp_source.h>
@@ -74,6 +76,7 @@
 #include <upipe-av/upipe_av.h>
 #include <upipe-av/upipe_av_samplefmt.h>
 #include <upipe-av/upipe_avcodec_decode.h>
+#include <upipe-av/upipe_avcodec_encode.h>
 #include <upipe-swscale/upipe_sws.h>
 #include <upipe-swresample/upipe_swr.h>
 #include <upipe-gl/upipe_glx_sink.h>
@@ -148,6 +151,10 @@ static unsigned w = 0;
 static unsigned h = 0;
 /* upipe dump file */
 static const char *dump = NULL;
+/* encode */
+static const char *dst = NULL;
+
+static struct uref_mgr *uref_mgr;
 
 static void uplay_stop(struct upump *upump);
 
@@ -218,6 +225,7 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
     struct uref *uref = uref_sibling_alloc(flow_def);
     uref_flow_set_def(uref, "pic.");
     /* request rgb16 as swscale conversion is faster than rgb24 */
+    if (!dst)
     uref_pic_flow_add_plane(uref, 1, 1, 2, "r5g6b5");
 
     if (w && h) {
@@ -244,26 +252,49 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
             uprobe_pfx_alloc(uprobe_use(uprobe_main),
                              UPROBE_LOG_VERBOSE, "play video"));
 #endif
-    struct upipe_mgr *upipe_glx_mgr = upipe_glx_sink_mgr_alloc();
-    if (cube) {
-        upipe = upipe_void_chain_output(
+    if (dst) {
+        struct upipe_mgr *upipe_avcenc_mgr = upipe_avcenc_mgr_alloc();
+        struct uref *flow = uref_block_flow_alloc_def(uref_mgr, "");
+        uref_avcenc_set_codec_name(flow, "libx264");
+        struct upipe *avcenc = upipe_flow_chain_output(upipe, upipe_avcenc_mgr,
+                uprobe_pfx_alloc(uprobe_use(uprobe_main),
+                    UPROBE_LOG_VERBOSE, "avcenc"), flow);
+        assert(avcenc);
+        upipe_set_option(avcenc, "b", "12000000");
+        uref_free(flow);
+        upipe_mgr_release(upipe_avcenc_mgr);
+
+        struct upipe_mgr *upipe_fsink_mgr = upipe_fsink_mgr_alloc();
+        assert(upipe_fsink_mgr != NULL);
+        struct upipe *fsink = upipe_void_chain_output(
+                avcenc, upipe_fsink_mgr,
+                uprobe_pfx_alloc(uprobe_use(uprobe_main), UPROBE_LOG_VERBOSE, "sink"));
+        upipe_mgr_release(upipe_fsink_mgr);
+        ubase_assert(upipe_fsink_set_path(fsink, dst, UPIPE_FSINK_OVERWRITE));
+        upipe_release(fsink);
+        upipe_attach_uclock(upipe);
+    } else {
+        struct upipe_mgr *upipe_glx_mgr = upipe_glx_sink_mgr_alloc();
+        if (cube) {
+            upipe = upipe_void_chain_output(
                     upipe, upipe_glx_mgr,
                     uprobe_gl_sink_alloc(
                         uprobe_gl_sink_cube_alloc(
                             uprobe_pfx_alloc(uprobe_use(&uprobe_glx_s),
-                                             UPROBE_LOG_VERBOSE, "glx"))));
-    }
-    else {
-        upipe = upipe_void_chain_output(
+                                UPROBE_LOG_VERBOSE, "glx"))));
+        }
+        else {
+            upipe = upipe_void_chain_output(
                     upipe, upipe_glx_mgr,
                     uprobe_gl_sink_alloc(
                         uprobe_pfx_alloc(uprobe_use(&uprobe_glx_s),
-                                         UPROBE_LOG_VERBOSE, "glx")));
+                            UPROBE_LOG_VERBOSE, "glx")));
+        }
+        assert(upipe != NULL);
+        upipe_mgr_release(upipe_glx_mgr);
+        upipe_glx_sink_init(upipe, 0, 0, 1920, 1080);
+        //    upipe_attach_uclock(upipe);
     }
-    assert(upipe != NULL);
-    upipe_mgr_release(upipe_glx_mgr);
-    upipe_glx_sink_init(upipe, 0, 0, 1920, 1080);
-//    upipe_attach_uclock(upipe);
 
     upipe_release(upipe);
     return UBASE_ERR_NONE;
@@ -552,7 +583,7 @@ static void uplay_stop(struct upump *upump)
 }
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Usage: %s [-D <dot file>] [-d] [-q] [-u] [-s 1920x1080] [-A <audio>] [-S <subtitle>] [-V <video>] [-P <program>] [-R 1:1] <source>\n", argv0);
+    fprintf(stderr, "Usage: %s [-D <dot file>] [-d] [-q] [-u] [-s 1920x1080] [-A <audio>] [-S <subtitle>] [-V <video>] [-P <program>] [-R 1:1] <source> [dst]\n", argv0);
     exit(EXIT_FAILURE);
 }
 
@@ -615,6 +646,8 @@ int main(int argc, char **argv)
         usage(argv[0]);
 
     const char *uri = argv[optind++];
+    if (argc > optind)
+        dst = argv[optind++];
 
     /* structures managers */
     main_upump_mgr = upump_ev_mgr_alloc_default(UPUMP_POOL, UPUMP_BLOCKER_POOL);
@@ -622,7 +655,7 @@ int main(int argc, char **argv)
     struct umem_mgr *umem_mgr = umem_pool_mgr_alloc_simple(UMEM_POOL);
     struct udict_mgr *udict_mgr = udict_inline_mgr_alloc(UDICT_POOL_DEPTH,
                                                          umem_mgr, -1, -1);
-    struct uref_mgr *uref_mgr = uref_std_mgr_alloc(UREF_POOL_DEPTH, udict_mgr,
+    uref_mgr = uref_std_mgr_alloc(UREF_POOL_DEPTH, udict_mgr,
                                                    0);
     udict_mgr_release(udict_mgr);
     struct uclock *uclock = uclock_std_alloc(0);
