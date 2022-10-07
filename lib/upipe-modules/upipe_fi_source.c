@@ -65,6 +65,9 @@
 #include <upipe/ubase.h>
 #include <upipe/uclock.h>
 #include <upipe/uref.h>
+#include <upipe/uref_dump.h>
+#include <upipe/udict.h>
+#include <upipe/ustring.h>
 #include <upipe/uref_pic.h>
 #include <upipe/uref_pic_flow.h>
 #include <upipe/uref_pic_flow_formats.h>
@@ -213,6 +216,9 @@ struct upipe_fisrc {
 
     uint8_t buffer[5];
     size_t  buffered;
+
+    size_t width;
+    size_t height;
 
     /** public upipe structure */
     struct upipe upipe;
@@ -651,6 +657,8 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->pkt_num = 0;
     upipe_fisrc->ip[0] = '\0';
     upipe_fisrc->buffered = 0;
+    upipe_fisrc->width = 0;
+    upipe_fisrc->height = 0;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -757,6 +765,254 @@ static const char *get_pt(int pt)
     return foo[pt];
 }
 
+enum sampling {
+    sampling_Unknown,
+    sampling_YCbCr422,
+    sampling_YCbCr444,
+    sampling_RGB,
+};
+
+enum colorimetry {
+    colorimetry_UNSPECIFIED,
+    colorimetry_BT601,
+    colorimetry_BT709,
+    colorimetry_BT2020,
+    colorimetry_BT2100,
+    colorimetry_ST2065_1,
+    colorimetry_ST2065_3,
+    colorimetry_XYZ,
+};
+
+enum range {
+    range_narrow,
+    range_fullprotect,
+    range_full,
+};
+
+static enum range parse_range(const char *val)
+{
+    if (!strcmp(val, "FULL"))
+        return range_full;
+    if (!strcmp(val, "FULLPROTECT"))
+        return range_fullprotect;
+    if (!strcmp(val, "NARROW"))
+        return range_narrow;
+    return range_narrow;
+}
+
+static enum sampling parse_sampling(const char *val)
+{
+    if (!strcmp(val, "YCbCr-4:2:2"))
+        return sampling_YCbCr422;
+    if (!strcmp(val, "YCbCr-4:4:4"))
+        return sampling_YCbCr444;
+    if (!strcmp(val, "RGB"))
+        return sampling_RGB;
+    if (!strcmp(val, "YCbCr422")) // LOL
+        return sampling_YCbCr422;
+    if (!strcmp(val, "YCbCr444"))
+        return sampling_YCbCr444;
+    return sampling_Unknown;
+}
+
+static enum colorimetry parse_colorimetry(const char *val)
+{
+    if (!strcmp(val, "BT601"))
+        return colorimetry_BT601;
+    if (!strcmp(val, "BT709"))
+        return colorimetry_BT709;
+    if (!strcmp(val, "BT2020"))
+        return colorimetry_BT2020;
+    if (!strcmp(val, "BT2100"))
+        return colorimetry_BT2100;
+    if (!strcmp(val, "ST2065-1"))
+        return colorimetry_ST2065_1;
+    if (!strcmp(val, "ST2065-3"))
+        return colorimetry_ST2065_3;
+    if (!strcmp(val, "XYZ"))
+        return colorimetry_XYZ;
+    return colorimetry_UNSPECIFIED;
+}
+
+static int parse_udict_str(struct ustring u, struct udict *udict)
+{
+    while (!ustring_is_empty((u = ustring_shift_while(u, " ")))) { /* skip spaces */
+        struct ustring sub = ustring_split_sep(&u, ";");     /* split token */
+
+        struct ustring key = ustring_split_sep(&sub, "=");   /* split k = v */
+        if (ustring_is_empty(key))
+            continue;
+        char *k = NULL;
+        UBASE_RETURN(ustring_to_str(key, &k));               /* strdup */
+
+        int ret = UBASE_ERR_NONE;
+        if (!ustring_is_null(sub)) {                         /* set k = v */
+            uint8_t *attr;
+            ret = udict_set(udict, k, UDICT_TYPE_STRING, sub.len + 1, &attr);
+            if (ret == UBASE_ERR_NONE) {
+                memcpy(attr, sub.at, sub.len);
+                attr[sub.len] = '\0';
+            }
+        } else {                                             /* set k */
+            ret = udict_set_void(udict, NULL, UDICT_TYPE_VOID, k);
+        }
+
+        free(k);
+        UBASE_RETURN(ret);
+    }
+
+    return UBASE_ERR_NONE;
+}
+
+static void parse_cdi_extra(struct upipe *upipe, struct udict_mgr *udict_mgr, uint8_t *extra, size_t n)
+{
+    struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
+
+    typedef struct __attribute__((__packed__)) {
+        uint16_t stream_identifier;
+        char uri[257];
+        uint8_t data[1024];
+        uint8_t packing[3]; // LOL
+        int32_t data_size;
+    } CdiAvmConfig;
+
+    if (n < sizeof(CdiAvmConfig)) {
+        upipe_err_va(upipe, "Extra data too small (%zu < %zu)",
+            n, sizeof(CdiAvmConfig));
+        return;
+    }
+    if (n > sizeof(CdiAvmConfig)) {
+        upipe_warn_va(upipe, "Extra data too big (%zu > %zu)",
+            n, sizeof(CdiAvmConfig));
+    }
+
+    CdiAvmConfig c;
+    memcpy(&c, extra, sizeof(c));
+    c.uri[sizeof(c.uri) - 1] = '\0';
+    c.packing[0] = '\0';
+
+    if (strcmp(c.uri, "https://cdi.elemental.com/specs/baseline-video")) {
+        upipe_warn_va(upipe, "Unknown specification %s", c.uri);
+        return;
+    }
+
+    if (c.data_size > sizeof(c.data)) {
+        upipe_warn_va(upipe, "Data size too big (%u > %zu)",
+            c.data_size, sizeof(c.data));
+        c.data_size = sizeof(c.data);
+    }
+
+    struct ustring u;
+    u.at = (char*)c.data;
+    u.len = c.data_size;
+    struct udict *udict = udict_alloc(udict_mgr, 0);
+    if (!ubase_check(parse_udict_str(u, udict))) {
+        upipe_warn_va(upipe, "parsing extra data failed");
+    }
+
+    const char *val;
+
+    uint8_t major = 0, minor = 0;
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "cdi_profile_version"))) {
+        if (sscanf(val, "%2hhu.%2hhu", &major, &minor) != 2) {
+            goto end;
+        }
+    }
+
+    if (major != 1 || minor != 0) {
+        upipe_warn_va(upipe, "Unknown cdi_profile_version %d.%d", major, minor);
+        goto end;
+    }
+
+    enum sampling sampling = sampling_Unknown;
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "sampling"))) {
+        sampling = parse_sampling(val);
+    }
+
+    enum colorimetry colorimetry = colorimetry_UNSPECIFIED;
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "colorimetry"))) {
+        colorimetry = parse_colorimetry(val);
+    }
+
+    enum range range = range_narrow;
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "range"))) {
+        range = parse_range(val);
+    }
+
+    size_t width = 0, height = 0, depth = 0;
+
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "width"))) {
+        width = atoi(val);
+    }
+
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "height"))) {
+        height = atoi(val);
+    }
+
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "depth"))) {
+        depth = atoi(val);
+    }
+
+    struct urational fps;
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "fps"))) {
+        if (sscanf(val, "%" SCNu64 "/%" SCNu64, &fps.num, &fps.den) != 2) {
+            fps.den = 1;
+            if (sscanf(val, "%" SCNu64, &fps.num) != 1)
+                fps.num = 0;
+        }
+    }
+
+    if (depth != 10) {
+        upipe_err_va(upipe, "Bit depth %zu not supported", depth);
+        goto end;
+    }
+
+    struct uref *flow_format = NULL;
+    switch (sampling) {
+    case sampling_YCbCr422:
+        if (depth == 8)
+            flow_format = uref_pic_flow_alloc_yuv422p(upipe_fisrc->uref_mgr);
+        else if (depth == 10)
+            flow_format = uref_pic_flow_alloc_yuv422p10le(upipe_fisrc->uref_mgr);
+        else if (depth == 12)
+            flow_format = uref_pic_flow_alloc_yuv422p12le(upipe_fisrc->uref_mgr);
+        else
+            break;
+        if (unlikely(flow_format == NULL)) {
+            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+            goto end;
+        }
+        break;
+    case sampling_Unknown: upipe_err(upipe, "Unknown sampling"); break;
+    case sampling_YCbCr444: upipe_err(upipe, "Unsupported 444 sampling"); break;
+    case sampling_RGB: upipe_err(upipe, "Unsupported RGB sampling"); break;
+    }
+
+    switch (colorimetry) {
+        default: break; // TODO
+    }
+
+    switch (range) {
+        default: break; // TODO
+    }
+
+    uref_pic_flow_set_hsize(flow_format, width);
+    uref_pic_flow_set_vsize(flow_format, height);
+    uref_pic_flow_set_fps(flow_format, fps);
+
+    uref_dump(flow_format, upipe->uprobe);
+
+    upipe_fisrc_require_ubuf_mgr(upipe, flow_format);
+
+    upipe_fisrc->width = width;
+    upipe_fisrc->height = height;
+
+    upipe_dbg_va(upipe, "stream id %hu", c.stream_identifier);
+
+end:
+    udict_free(udict);
+}
+
 /** @internal @This reads data from the source and outputs it.
  * It is called either when the idler triggers (permanent storage mode) or
  * when data is available on the udp socket descriptor (live stream mode).
@@ -772,38 +1028,13 @@ static void upipe_fisrc_worker2(struct upump *upump)
         systime = uclock_now(upipe_fisrc->uclock);
     struct uref *uref = upipe_fisrc->output_uref;
 
-    if (unlikely(uref == NULL)) {
-        uref = uref_pic_alloc(upipe_fisrc->uref_mgr, upipe_fisrc->ubuf_mgr, 1920, 1080);
-        if (unlikely(uref == NULL)) {
-            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
-            upipe_err(upipe, "FATAL");
-            return;
-        }
-        upipe_fisrc->output_uref = uref;
-        uref_clock_set_cr_sys(uref, systime);
-        uref_clock_set_pts_prog(uref, systime);
-        upipe_throw_clock_ref(upipe, uref, systime, 0);
-        upipe_throw_clock_ts(upipe, uref);
-    }
-
-    uint16_t *y, *u, *v;
-    if (!ubase_check(uref_pic_plane_write(uref, "y10l", 0, 0, -1, -1, (uint8_t**)&y))) {
-        upipe_err(upipe, "Cannot map y");
-    }
-    if (!ubase_check(uref_pic_plane_write(uref, "u10l", 0, 0, -1, -1, (uint8_t**)&u))) {
-        upipe_err(upipe, "Cannot map u");
-    }
-    if (!ubase_check(uref_pic_plane_write(uref, "v10l", 0, 0, -1, -1, (uint8_t**)&v))) {
-        upipe_err(upipe, "Cannot map v");
-    }
-
     uint8_t *buffer = upipe_fisrc->rx_buf;
     buffer += upipe_fisrc->nn * 8961; // something to do with jumbo
     ssize_t s = rx(upipe);
 
     size_t offset = 0;
     if (s <= 0)
-        goto skip;
+        return;
 
     assert(s >= 9);
     assert(s == 8961);
@@ -843,16 +1074,9 @@ static void upipe_fisrc_worker2(struct upump *upump)
 
             s -= 4+8+8+8+2+8;
 
-            // TODO: this is flow def
+            parse_cdi_extra(upipe, upipe_fisrc->uref_mgr->udict_mgr, buffer, extra_data_size);
             assert (s >= extra_data_size);
             s -= extra_data_size;
-            char foo[extra_data_size+1];
-            memcpy(foo, buffer, extra_data_size);
-            foo[extra_data_size] = '\0';
-            if (extra_data_size >= 259) {
-                printf("XTRA %s\n", &foo[2]);
-                printf("XTRA2 %s\n", &foo[259]);
-            }
             buffer += extra_data_size;
         }
         break;
@@ -874,6 +1098,36 @@ static void upipe_fisrc_worker2(struct upump *upump)
         s = 0;
     default: break;
     }
+
+    if (!upipe_fisrc->ubuf_mgr)
+        return;
+
+    if (unlikely(uref == NULL)) {
+        uref = uref_pic_alloc(upipe_fisrc->uref_mgr, upipe_fisrc->ubuf_mgr,
+                upipe_fisrc->width, upipe_fisrc->height);
+        if (unlikely(uref == NULL)) {
+            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+            upipe_err(upipe, "FATAL");
+            return;
+        }
+        upipe_fisrc->output_uref = uref;
+        uref_clock_set_cr_sys(uref, systime);
+        uref_clock_set_pts_prog(uref, systime);
+        upipe_throw_clock_ref(upipe, uref, systime, 0);
+        upipe_throw_clock_ts(upipe, uref);
+    }
+
+    uint16_t *y, *u, *v;
+    if (!ubase_check(uref_pic_plane_write(uref, "y10l", 0, 0, -1, -1, (uint8_t**)&y))) {
+        upipe_err(upipe, "Cannot map y");
+    }
+    if (!ubase_check(uref_pic_plane_write(uref, "u10l", 0, 0, -1, -1, (uint8_t**)&u))) {
+        upipe_err(upipe, "Cannot map u");
+    }
+    if (!ubase_check(uref_pic_plane_write(uref, "v10l", 0, 0, -1, -1, (uint8_t**)&v))) {
+        upipe_err(upipe, "Cannot map v");
+    }
+
 
     offset -= (offset % 5);
 
@@ -956,8 +1210,6 @@ static void upipe_fisrc_worker2(struct upump *upump)
     upipe_fisrc->buffered = s;
     if (s)
         memcpy(upipe_fisrc->buffer, src, s);
-
-skip:
 
     uref_pic_plane_unmap(uref, "y10l", 0, 0, -1, -1);
     uref_pic_plane_unmap(uref, "u10l", 0, 0, -1, -1);
@@ -1058,21 +1310,6 @@ static int upipe_fisrc_check(struct upipe *upipe, struct uref *flow_format)
 
     if (upipe_fisrc->uref_mgr == NULL) {
         upipe_fisrc_require_uref_mgr(upipe);
-        return UBASE_ERR_NONE;
-    }
-
-    if (upipe_fisrc->ubuf_mgr == NULL) {
-        struct uref *flow_format = uref_pic_flow_alloc_yuv422p10le(upipe_fisrc->uref_mgr);
-        if (unlikely(flow_format == NULL)) {
-            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
-            return UBASE_ERR_ALLOC;
-        }
-        UBASE_RETURN(uref_pic_flow_set_hsize(flow_format, 1920));
-        UBASE_RETURN(uref_pic_flow_set_vsize(flow_format, 1080));
-        struct urational fps = { 10, 1 };
-        UBASE_RETURN(uref_pic_flow_set_fps(flow_format, fps));
-
-        upipe_fisrc_require_ubuf_mgr(upipe, flow_format);
         return UBASE_ERR_NONE;
     }
 
