@@ -60,8 +60,10 @@
 #include <upipe-modules/upipe_file_source.h>
 #include <upipe-modules/upipe_file_sink.h>
 #include <upipe-modules/upipe_udp_source.h>
+#include <upipe-modules/upipe_udp_sink.h>
 #include <upipe-modules/upipe_fi_source.h>
 #include <upipe-modules/upipe_rtp_source.h>
+#include <upipe-modules/upipe_rtp_prepend.h>
 #include <upipe-modules/upipe_http_source.h>
 #include <upipe-modules/upipe_null.h>
 #include <upipe-modules/upipe_play.h>
@@ -70,7 +72,9 @@
 #include <upipe-modules/upipe_worker_linear.h>
 #include <upipe-modules/upipe_worker_sink.h>
 #include <upipe-ts/upipe_ts_demux.h>
+#include <upipe-ts/upipe_ts_mux.h>
 #include <upipe-framers/upipe_auto_framer.h>
+#include <upipe-framers/upipe_h264_framer.h>
 #include <upipe-filters/upipe_filter_decode.h>
 #include <upipe-filters/upipe_filter_format.h>
 #include <upipe-av/upipe_av.h>
@@ -103,6 +107,8 @@
 #define DEC_IN_QUEUE_LENGTH     25
 #define DEC_OUT_QUEUE_LENGTH    5
 #define SOUND_QUEUE_LENGTH      10
+
+static enum uprobe_log_level loglevel = UPROBE_LOG_LEVEL;
 
 /* true if we receive from libfabric */
 static bool fabric = false;
@@ -253,6 +259,61 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
                              UPROBE_LOG_VERBOSE, "play video"));
 #endif
     if (dst) {
+        struct upipe_mgr *upipe_ts_mux_mgr = upipe_ts_mux_mgr_alloc();
+        assert(upipe_ts_mux_mgr);
+        struct upipe *upipe_ts_mux =
+            upipe_void_alloc(
+                    upipe_ts_mux_mgr,
+                    uprobe_pfx_alloc(uprobe_use(uprobe_main),
+                        UPROBE_LOG_VERBOSE, "mux"));
+        assert(upipe_ts_mux);
+        upipe_mgr_release(upipe_ts_mux_mgr);
+
+//        upipe_ts_mux_set_mode(upipe_ts_mux, UPIPE_TS_MUX_MODE_CAPPED);
+        upipe_set_output_size(upipe_ts_mux, 1316);
+//        upipe_ts_mux_set_padding_octetrate(upipe_ts_mux, 128000);
+        upipe_attach_uclock(upipe_ts_mux);
+        struct uref *flow_def = uref_alloc_control(uref_mgr);
+        uref_flow_set_def(flow_def, "void.");
+        upipe_set_flow_def(upipe_ts_mux, flow_def);
+        uref_free(flow_def);
+
+        struct upipe_mgr *upipe_rtp_prepend_mgr = upipe_rtp_prepend_mgr_alloc();
+        assert(upipe_rtp_prepend_mgr);
+        struct upipe *upipe_rtp_prepend =
+            upipe_void_alloc_output(
+                    upipe_ts_mux, upipe_rtp_prepend_mgr,
+                    uprobe_pfx_alloc(
+                        uprobe_use(uprobe_main), loglevel,
+                        "rtpp"));
+        upipe_mgr_release(upipe_rtp_prepend_mgr);
+        assert(upipe_rtp_prepend);
+
+        struct upipe_mgr *upipe_udpsink_mgr = upipe_udpsink_mgr_alloc();
+        assert(upipe_udpsink_mgr);
+        struct upipe *upipe_udpsink =
+            upipe_void_chain_output(
+                    upipe_rtp_prepend, upipe_udpsink_mgr,
+                    uprobe_pfx_alloc(
+                        uprobe_use(uprobe_main), loglevel,
+                        "udp"));
+        upipe_mgr_release(upipe_udpsink_mgr);
+        assert(upipe_udpsink);
+        ubase_assert(upipe_attach_uclock(upipe_udpsink));
+        ubase_assert(upipe_set_uri(upipe_udpsink, dst));
+        upipe_release(upipe_udpsink);
+
+        flow_def = uref_alloc_control(uref_mgr);
+        uref_flow_set_def(flow_def, "void.");
+        upipe_ts_mux = upipe_void_chain_sub(upipe_ts_mux,
+                uprobe_pfx_alloc(uprobe_use(uprobe_main), UPROBE_LOG_VERBOSE,
+                    "mux prog"));
+        assert(upipe_ts_mux);
+        uref_flow_set_id(flow_def, 1);
+        uref_ts_flow_set_pid(flow_def, 256);
+        upipe_set_flow_def(upipe_ts_mux, flow_def);
+        uref_free(flow_def);
+
         struct upipe_mgr *upipe_avcenc_mgr = upipe_avcenc_mgr_alloc();
         struct uref *flow = uref_block_flow_alloc_def(uref_mgr, "");
         uref_avcenc_set_codec_name(flow, "libx264");
@@ -261,18 +322,25 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
                     UPROBE_LOG_VERBOSE, "avcenc"), flow);
         assert(avcenc);
         upipe_set_option(avcenc, "b", "12000000");
+        upipe_set_option(avcenc, "preset", "ultrafast");
+        upipe_set_option(avcenc, "tune", "zerolatency");
         uref_free(flow);
         upipe_mgr_release(upipe_avcenc_mgr);
 
-        struct upipe_mgr *upipe_fsink_mgr = upipe_fsink_mgr_alloc();
-        assert(upipe_fsink_mgr != NULL);
-        struct upipe *fsink = upipe_void_chain_output(
-                avcenc, upipe_fsink_mgr,
-                uprobe_pfx_alloc(uprobe_use(uprobe_main), UPROBE_LOG_VERBOSE, "sink"));
-        upipe_mgr_release(upipe_fsink_mgr);
-        ubase_assert(upipe_fsink_set_path(fsink, dst, UPIPE_FSINK_OVERWRITE));
-        upipe_release(fsink);
-        upipe_attach_uclock(upipe);
+        struct upipe_mgr *upipe_h264f_mgr = upipe_h264f_mgr_alloc();
+        avcenc = upipe_void_chain_output(avcenc, upipe_h264f_mgr, 
+                uprobe_pfx_alloc(uprobe_use(uprobe_main),
+                    UPROBE_LOG_VERBOSE, "h264f"));
+        upipe_mgr_release(upipe_h264f_mgr);
+
+        struct upipe *mux_input =
+            upipe_void_alloc_sub(
+                    upipe_ts_mux,
+                    uprobe_pfx_alloc(uprobe_use(uprobe_main),
+                        loglevel, "mux vid"));
+        assert(mux_input);
+
+        upipe_set_output(avcenc, mux_input);
     } else {
         struct upipe_mgr *upipe_glx_mgr = upipe_glx_sink_mgr_alloc();
         if (cube) {
@@ -589,7 +657,6 @@ static void usage(const char *argv0) {
 
 int main(int argc, char **argv)
 {
-    enum uprobe_log_level loglevel = UPROBE_LOG_LEVEL;
     int opt;
     while ((opt = getopt(argc, argv, "fudqcA:V:S:P:R:s:D:")) != -1) {
         switch (opt) {
