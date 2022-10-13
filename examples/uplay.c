@@ -80,7 +80,7 @@
 #include <upipe-av/upipe_av.h>
 #include <upipe-av/upipe_av_samplefmt.h>
 #include <upipe-av/upipe_avcodec_decode.h>
-#include <upipe-av/upipe_avcodec_encode.h>
+#include <upipe-x264/upipe_x264.h>
 #include <upipe-swscale/upipe_sws.h>
 #include <upipe-swresample/upipe_swr.h>
 #include <upipe-gl/upipe_glx_sink.h>
@@ -314,21 +314,27 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
         upipe_set_flow_def(upipe_ts_mux, flow_def);
         uref_free(flow_def);
 
-        struct upipe_mgr *upipe_avcenc_mgr = upipe_avcenc_mgr_alloc();
-        struct uref *flow = uref_block_flow_alloc_def(uref_mgr, "");
-        uref_avcenc_set_codec_name(flow, "libx264");
-        struct upipe *avcenc = upipe_flow_chain_output(upipe, upipe_avcenc_mgr,
+        struct upipe_mgr *upipe_x264_mgr = upipe_x264_mgr_alloc();
+        struct upipe *x264 = upipe_void_chain_output(upipe, upipe_x264_mgr,
                 uprobe_pfx_alloc(uprobe_use(uprobe_main),
-                    UPROBE_LOG_VERBOSE, "avcenc"), flow);
-        assert(avcenc);
-        upipe_set_option(avcenc, "b", "12000000");
-        upipe_set_option(avcenc, "preset", "ultrafast");
-        upipe_set_option(avcenc, "tune", "zerolatency");
-        uref_free(flow);
-        upipe_mgr_release(upipe_avcenc_mgr);
+                    UPROBE_LOG_VERBOSE, "x264"));
+        assert(x264);
+        ubase_assert(upipe_x264_set_profile(x264, "baseline"));
+        ubase_assert(upipe_x264_set_default_preset(x264,
+                    "ultrafast", "zerolatency"));
+        ubase_assert(upipe_set_option(x264, "threads", "1"));
+        ubase_assert(upipe_set_option(x264, "bitrate", "12000"));
+        ubase_assert(upipe_set_option(x264, "vbv-maxrate", "12000"));
+        ubase_assert(upipe_set_option(x264, "vbv-bufsize", "12000"));
+        ubase_assert(upipe_set_option(x264, "repeat-headers", "1"));
+        ubase_assert(upipe_set_option(x264, "nal-hrd", "vbr"));
+        ubase_assert(upipe_set_option(x264, "keyint", "25"));
+        ubase_assert(upipe_set_option(x264, "intra-refresh", "1"));
+
+        upipe_mgr_release(upipe_x264_mgr);
 
         struct upipe_mgr *upipe_h264f_mgr = upipe_h264f_mgr_alloc();
-        avcenc = upipe_void_chain_output(avcenc, upipe_h264f_mgr, 
+        x264 = upipe_void_chain_output(x264, upipe_h264f_mgr, 
                 uprobe_pfx_alloc(uprobe_use(uprobe_main),
                     UPROBE_LOG_VERBOSE, "h264f"));
         upipe_mgr_release(upipe_h264f_mgr);
@@ -340,7 +346,7 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
                         loglevel, "mux vid"));
         assert(mux_input);
 
-        upipe_set_output(avcenc, mux_input);
+        upipe_set_output(x264, mux_input);
     } else {
         struct upipe_mgr *upipe_glx_mgr = upipe_glx_sink_mgr_alloc();
         if (cube) {
