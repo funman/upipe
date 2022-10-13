@@ -214,6 +214,7 @@ struct upipe_fisrc {
     uint16_t pkt_num;
     char ip[INET6_ADDRSTRLEN];
 
+    // FIXME : can't work with out of order packets
     uint8_t buffer[5];
     size_t  buffered;
 
@@ -1057,10 +1058,15 @@ static void upipe_fisrc_worker2(struct upump *upump)
             uint64_t max_latency_microsecs = get_64le(buffer); buffer += 8;
             uint32_t sec = get_32le(buffer); buffer += 4; /// The number of seconds since the SMPTE Epoch which is 1970-01-01T00:00:00.
             uint32_t nsec = get_32le(buffer); buffer += 4; /// The number of fractional seconds as measured in nanoseconds. The value in this field is always less than 10^9.
+            // TODO : pts
+
             uint64_t payload_user_data = get_64le(buffer); buffer += 8;
 
             uint16_t  extra_data_size = get_16le(buffer); buffer += 2;
+
             uint64_t tx_start_time_microseconds = get_64le(buffer); buffer += 8;
+            // TODO : mesure network latency?
+
             upipe_dbg_va(upipe,
                     "total payload size %u max latency usecs %" PRId64 " PTP %u.%09u userdata %" PRIx64 " extradata %d tx_start_time_usec %" PRId64,
 
