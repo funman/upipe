@@ -1000,9 +1000,7 @@ static void parse_cdi_extra(struct upipe *upipe, struct udict_mgr *udict_mgr, ui
     uref_pic_flow_set_vsize(flow_format, height);
     uref_pic_flow_set_fps(flow_format, fps);
 
-    uref_dump(flow_format, upipe->uprobe);
-
-    upipe_fisrc_require_ubuf_mgr(upipe, flow_format);
+    upipe_fisrc_store_flow_def(upipe, flow_format);
 
     upipe_fisrc->width = width;
     upipe_fisrc->height = height;
@@ -1024,6 +1022,8 @@ static void upipe_fisrc_worker2(struct upump *upump)
     struct upipe *upipe = upump_get_opaque(upump, struct upipe *);
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
     uint64_t systime = 0; /* to keep gcc quiet */
+    if (!upipe_fisrc->ubuf_mgr)
+        upipe_fisrc_check(upipe, NULL);
     if (unlikely(upipe_fisrc->uclock != NULL))
         systime = uclock_now(upipe_fisrc->uclock);
     struct uref *uref = upipe_fisrc->output_uref;
@@ -1311,6 +1311,13 @@ static int upipe_fisrc_check(struct upipe *upipe, struct uref *flow_format)
     if (upipe_fisrc->uref_mgr == NULL) {
         upipe_fisrc_require_uref_mgr(upipe);
         return UBASE_ERR_NONE;
+    }
+
+    if (upipe_fisrc->ubuf_mgr == NULL) {
+        if (upipe_fisrc->flow_def) {
+            upipe_fisrc_require_ubuf_mgr(upipe, uref_dup(upipe_fisrc->flow_def));
+            return UBASE_ERR_NONE;
+        }
     }
 
     if (upipe_fisrc->uclock == NULL &&
