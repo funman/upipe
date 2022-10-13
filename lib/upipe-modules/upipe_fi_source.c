@@ -955,7 +955,7 @@ static void parse_cdi_extra(struct upipe *upipe, struct udict_mgr *udict_mgr, ui
     }
 
     struct urational fps;
-    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "fps"))) {
+    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "exactframerate"))) {
         if (sscanf(val, "%" SCNu64 "/%" SCNu64, &fps.num, &fps.den) != 2) {
             fps.den = 1;
             if (sscanf(val, "%" SCNu64, &fps.num) != 1)
