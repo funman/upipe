@@ -101,6 +101,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <sys/mman.h>
+
 #include <rdma/fi_cm.h>
 
 /** default size of buffers when unspecified */
@@ -191,16 +193,14 @@ struct upipe_fisrc {
     struct fid_fabric *fabric;
     struct fid_domain *domain;
     struct fid_ep *ep;
-    struct fid_cq *txcq, *rxcq;
+    struct fid_cq *rxcq;
     struct fid_mr *mr;
     struct fid_av *av;
 
-    uint64_t tx_seq, rx_seq, tx_cq_cntr, rx_cq_cntr;
+    uint64_t rx_seq, rx_cq_cntr;
 
-    fi_addr_t remote_fi_addr;
-    void *buf, *tx_buf, *rx_buf;
+    void *buf, *rx_buf;
     size_t x_size;
-    size_t nn;
 
     uint8_t state;
 
@@ -473,13 +473,14 @@ static ssize_t rx (struct upipe *upipe)
     if (get_cq_comp (upipe_fisrc->rxcq, &upipe_fisrc->rx_cq_cntr, upipe_fisrc->rx_seq))
         return -1;
 
+    uint64_t n = upipe_fisrc->rx_cq_cntr;
+    if (n >= upipe_fisrc->x_size / 8968)
+        n = 0;
+
     struct iovec msg_iov = {
-        .iov_base = (uint8_t*)upipe_fisrc->rx_buf + ++upipe_fisrc->nn * 8961,
+        .iov_base = (uint8_t*)upipe_fisrc->rx_buf + n * 8968,
         .iov_len = 8961,
     };
-
-    if (upipe_fisrc->nn >= upipe_fisrc->x_size / 8961)
-        upipe_fisrc->nn = 0;
 
     struct fi_msg msg = {
         .msg_iov = &msg_iov,
@@ -511,65 +512,44 @@ do {                    \
 static int alloc_msgs (struct upipe *upipe)
 {
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
-    struct fi_info *fi = upipe_fisrc->fi;
     const unsigned int size_max_power_two = 22;
+    const size_t max_msg_size = upipe_fisrc->fi->ep_attr->max_msg_size;
+    static const unsigned int packet_buffer_alignment = 8;
+    static const unsigned int packet_size = 8961;
+    static const unsigned int packet_count = 3000;
+
+    const int aligned_packet_size = (packet_size + packet_buffer_alignment - 1) & ~(packet_buffer_alignment - 1);
+    int allocated_size = aligned_packet_size * packet_count;
 
     upipe_fisrc->x_size = (1 << size_max_power_two) + (1 << (size_max_power_two - 1));
-    if (upipe_fisrc->x_size > fi->ep_attr->max_msg_size)
-        upipe_fisrc->x_size = fi->ep_attr->max_msg_size;
-    size_t buf_size = upipe_fisrc->x_size * 2;
+    upipe_fisrc->x_size = allocated_size;
+
+    if (upipe_fisrc->x_size > max_msg_size)
+        upipe_fisrc->x_size = max_msg_size;
+
+    size_t buf_size = upipe_fisrc->x_size;
 
     assert(upipe_fisrc->x_size >= upipe_fisrc->transfer_size);
-    upipe_fisrc->nn = 0;
-    ////////////////
 
     errno = 0;
     long alignment = sysconf (_SC_PAGESIZE);
     if (alignment <= 0)
         return 1;
 
-    /* Extra alignment for the second part of the buffer */
-    buf_size += alignment;
+    #define CDI_HUGE_PAGES_BYTE_SIZE    (2 * 1024 * 1024)
+    buf_size += CDI_HUGE_PAGES_BYTE_SIZE;
+    buf_size &= ~(CDI_HUGE_PAGES_BYTE_SIZE-1);
 
-    RET(posix_memalign (&upipe_fisrc->buf, (size_t) alignment, buf_size));
-    memset (upipe_fisrc->buf, 0, buf_size);
-    upipe_fisrc->rx_buf = upipe_fisrc->buf;
-    upipe_fisrc->tx_buf = (char *) upipe_fisrc->buf + upipe_fisrc->x_size;
-    upipe_fisrc->tx_buf =
-        (void *) (((uintptr_t) upipe_fisrc->tx_buf + alignment - 1) & ~(alignment - 1));
-
-    RET(fi_mr_reg (upipe_fisrc->domain, upipe_fisrc->buf, buf_size,
-            FI_SEND | FI_RECV | FI_MULTI_RECV, 0, 0, 0, &upipe_fisrc->mr, NULL));
-
-    return 0;
-}
-
-static int alloc_active_res (struct upipe *upipe)
-{
-    struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
-    struct fi_info *fi = upipe_fisrc->fi;
-    RET(alloc_msgs (upipe));
-
-    struct fi_cq_attr cq_attr = {
-        .wait_obj = FI_WAIT_NONE,
-        .format = FI_CQ_FORMAT_DATA
-    };
-
-    cq_attr.size = fi->tx_attr->size;
-    RET(fi_cq_open (upipe_fisrc->domain, &cq_attr, &upipe_fisrc->txcq, &upipe_fisrc->txcq));
-
-    cq_attr.size = fi->rx_attr->size;
-    RET(fi_cq_open (upipe_fisrc->domain, &cq_attr, &upipe_fisrc->rxcq, &upipe_fisrc->rxcq));
-
-    struct fi_av_attr av_attr = {0};
-    if (fi->ep_attr->type == FI_EP_RDM || fi->ep_attr->type == FI_EP_DGRAM) {
-        if (fi->domain_attr->av_type != FI_AV_UNSPEC)
-            av_attr.type = fi->domain_attr->av_type;
-
-        RET(fi_av_open (upipe_fisrc->domain, &av_attr, &upipe_fisrc->av, NULL));
+    upipe_fisrc->buf = mmap(NULL, buf_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+    if (upipe_fisrc->buf == MAP_FAILED) {
+        RET(posix_memalign (&upipe_fisrc->buf, (size_t) alignment, buf_size));
     }
 
-    RET(fi_endpoint (upipe_fisrc->domain, fi, &upipe_fisrc->ep, NULL));
+    memset (upipe_fisrc->buf, 0, buf_size);
+    upipe_fisrc->rx_buf = upipe_fisrc->buf;
+
+    RET(fi_mr_reg (upipe_fisrc->domain, upipe_fisrc->buf, buf_size,
+            FI_RECV, 0, 0, 0, &upipe_fisrc->mr, NULL));
 
     return 0;
 }
@@ -625,30 +605,35 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->hints->ep_attr->type = FI_EP_RDM;
     upipe_fisrc->hints->domain_attr->resource_mgmt = FI_RM_ENABLED;
     upipe_fisrc->hints->domain_attr->threading = FI_THREAD_DOMAIN;
-    upipe_fisrc->hints->tx_attr->comp_order = FI_ORDER_NONE;
     upipe_fisrc->hints->rx_attr->comp_order = FI_ORDER_NONE;
 
     RET(fi_getinfo (FI_VERSION (FI_MAJOR_VERSION, FI_MINOR_VERSION),
-            NULL, NULL, 0, upipe_fisrc->hints, &upipe_fisrc->fi));
+            NULL, NULL, FI_SOURCE /* ? */, upipe_fisrc->hints, &upipe_fisrc->fi));
 
     RET(fi_fabric (upipe_fisrc->fi->fabric_attr, &upipe_fisrc->fabric, NULL));
     RET(fi_domain (upipe_fisrc->fabric, upipe_fisrc->fi, &upipe_fisrc->domain, NULL));
-    RET(alloc_active_res (upipe));
+    struct fi_cq_attr cq_attr = {
+        .wait_obj = FI_WAIT_NONE,
+        .format = FI_CQ_FORMAT_DATA,
+        .size = upipe_fisrc->fi->rx_attr->size,
+    };
+
+    RET(fi_cq_open (upipe_fisrc->domain, &cq_attr, &upipe_fisrc->rxcq, &upipe_fisrc->rxcq));
+
+    struct fi_av_attr av_attr = {
+        .type = FI_AV_TABLE,
+        .count = 1
+    };
+
+    RET(fi_av_open (upipe_fisrc->domain, &av_attr, &upipe_fisrc->av, NULL));
+
+    RET(fi_endpoint (upipe_fisrc->domain, upipe_fisrc->fi, &upipe_fisrc->ep, NULL));
+
     RET(fi_ep_bind(upipe_fisrc->ep, &upipe_fisrc->av->fid, 0));
-    RET(fi_ep_bind(upipe_fisrc->ep, &upipe_fisrc->txcq->fid, FI_TRANSMIT));
     RET(fi_ep_bind(upipe_fisrc->ep, &upipe_fisrc->rxcq->fid, FI_RECV));
 
     RET(fi_enable (upipe_fisrc->ep));
-    rx(upipe);
-
-    if (upipe_fisrc->hints->ep_attr->type == FI_EP_DGRAM) {
-        if (upipe_fisrc->max_msg_size)
-            upipe_fisrc->hints->ep_attr->max_msg_size = upipe_fisrc->max_msg_size;
-        /* Post an extra receive to avoid lacking a posted receive in the finalize.  */
-        if (fi_recv (upipe_fisrc->ep, upipe_fisrc->rx_buf, upipe_fisrc->x_size, fi_mr_desc (upipe_fisrc->mr), 0, NULL)) {
-            //return 1;
-        }
-    }
+    RET(alloc_msgs (upipe));
 
     upipe_fisrc->fd = -1;
     upipe_fisrc->uri = NULL;
@@ -669,8 +654,8 @@ static void transmit(struct upipe *upipe, ProbeCommand cmd, bool requires_ack, P
 {
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
 
-    uint8_t *tx_buf = upipe_fisrc->tx_buf;
-    memset(tx_buf, 0, 300);
+    uint8_t tx_buf[300];
+    memset(tx_buf, 0, sizeof(tx_buf));
     uint8_t *buf = tx_buf;
 
     // senders_version
@@ -1025,12 +1010,16 @@ static void upipe_fisrc_worker2(struct upump *upump)
     uint64_t systime = 0; /* to keep gcc quiet */
     if (!upipe_fisrc->ubuf_mgr)
         upipe_fisrc_check(upipe, NULL);
+
+    for (;;) {
     if (unlikely(upipe_fisrc->uclock != NULL))
         systime = uclock_now(upipe_fisrc->uclock);
     struct uref *uref = upipe_fisrc->output_uref;
 
-    uint8_t *buffer = upipe_fisrc->rx_buf;
-    buffer += upipe_fisrc->nn * 8961; // something to do with jumbo
+    uint64_t n = upipe_fisrc->rx_cq_cntr;
+    if (n >= upipe_fisrc->x_size / 8968)
+        n = 0;
+    uint8_t *buffer = upipe_fisrc->rx_buf + n * 8968;
     ssize_t s = rx(upipe);
 
     size_t offset = 0;
@@ -1081,7 +1070,8 @@ static void upipe_fisrc_worker2(struct upump *upump)
             s -= 4+8+8+8+2+8;
 
             parse_cdi_extra(upipe, upipe_fisrc->uref_mgr->udict_mgr, buffer, extra_data_size);
-            assert (s >= extra_data_size);
+            if (extra_data_size > s)
+                extra_data_size = s;
             s -= extra_data_size;
             buffer += extra_data_size;
         }
@@ -1105,10 +1095,30 @@ static void upipe_fisrc_worker2(struct upump *upump)
     default: break;
     }
 
-    if (!upipe_fisrc->ubuf_mgr)
+    {
+//    upipe_dbg_va(upipe, "%s(offset=%zu) at %.6f", __func__, offset, ((float)systime) / 27000000.);
+        static uint64_t start;
+        if (offset == 0)
+            start = systime;
+        if (offset + upipe_fisrc->buffered + s > 5184000) {
+            upipe_dbg_va(upipe, "got pic after %.6f ms", ((float)(systime - start)) / 27000.);
+        }
+    }
+
+    if (!upipe_fisrc->ubuf_mgr) {
+        upipe_err_va(upipe, "NO UBUF");
+        return;
+    }
+
+    static bool go = false;
+    if (offset == 0)
+        go = true;
+    if (!go)
         return;
 
+    bool uref_new = false;
     if (unlikely(uref == NULL)) {
+        uref_new = true;
         uref = uref_pic_alloc(upipe_fisrc->uref_mgr, upipe_fisrc->ubuf_mgr,
                 upipe_fisrc->width, upipe_fisrc->height);
         if (unlikely(uref == NULL)) {
@@ -1134,6 +1144,20 @@ static void upipe_fisrc_worker2(struct upump *upump)
         upipe_err(upipe, "Cannot map v");
     }
 
+    if (uref_new) {
+        //{ 0xF0, 0x0A, 0x46, 0xE0, 0xA4 }, // Blue
+        uint8_t a = 0xf0, b = 0x0a, c = 0x46, d = 0xe0, e = 0xa4;
+        uint16_t u1 = (a << 2)          | ((b >> 6) & 0x03); //1111111122
+        uint16_t y1 = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
+        uint16_t v1 = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
+        uint16_t y2 = ((d & 0x03) << 8) | e;                 //4455555555
+        for (int i = 0; i < 1920*1080/2; i++) {
+            u[i] = u1;
+            v[i] = v1;
+            y[2*i] = y1;
+            y[2*i+1] = y2;
+        }
+    }
 
     offset -= (offset % 5);
 
@@ -1149,7 +1173,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
         static int x;
         static FILE *f;
         if (!f) {
-            f = fopen("/home/fun/dump.c", "w");
+            f = fopen("/home/fun/dump.raw", "w");
             assert(f);
         }
         if (c)
@@ -1228,6 +1252,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
         upipe_fisrc->buffered = 0;
         upipe_fisrc->output_uref = NULL;
         upipe_fisrc_output(upipe, uref, &upipe_fisrc->upump);
+    }
     }
 }
 
@@ -1478,42 +1503,17 @@ static void upipe_fisrc_free(struct upipe *upipe)
 {
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
 
-/*
-    void *mem_desc[1] = { fi_mr_desc (mr) };
-    const char *fin_buf = "fin";
-    const size_t fin_buf_size = sizeof (fin_buf);
-
-    strcpy(tx_buf, fin_buf);
-
-    struct iovec iov;
-    iov.iov_base = tx_buf;
-    iov.iov_len = fin_buf_size;
-
-    struct fi_msg msg = {
-        .msg_iov = &iov,
-        .iov_count = 1,
-        .desc = mem_desc,
-        .addr = remote_fi_addr,
-    };
-
-    if (fi_sendmsg (ep, &msg, FI_TRANSMIT_COMPLETE))
-        return;
-
-    tx_seq++;
-*/
-
     if (upipe_fisrc->upump != NULL)
         upump_stop(upipe_fisrc->upump);
 
     fi_close(&upipe_fisrc->mr->fid);
     fi_close(&upipe_fisrc->ep->fid);
     fi_close(&upipe_fisrc->rxcq->fid);
-    fi_close(&upipe_fisrc->txcq->fid);
     fi_close(&upipe_fisrc->av->fid);
     fi_close(&upipe_fisrc->domain->fid);
     fi_close(&upipe_fisrc->fabric->fid);
 
-    free (upipe_fisrc->buf);
+    free (upipe_fisrc->buf); // FIXME : munmap
 
     fi_freeinfo (upipe_fisrc->fi);
 //    fi_freeinfo (upipe_fisrc->hints); // FIXME
