@@ -278,16 +278,20 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
         upipe_set_flow_def(upipe_ts_mux, flow_def);
         uref_free(flow_def);
 
-        struct upipe_mgr *upipe_rtp_prepend_mgr = upipe_rtp_prepend_mgr_alloc();
-        assert(upipe_rtp_prepend_mgr);
-        struct upipe *upipe_rtp_prepend =
-            upipe_void_alloc_output(
-                    upipe_ts_mux, upipe_rtp_prepend_mgr,
-                    uprobe_pfx_alloc(
-                        uprobe_use(uprobe_main), loglevel,
-                        "rtpp"));
-        upipe_mgr_release(upipe_rtp_prepend_mgr);
-        assert(upipe_rtp_prepend);
+        if (0) {
+            struct upipe_mgr *upipe_rtp_prepend_mgr = upipe_rtp_prepend_mgr_alloc();
+            assert(upipe_rtp_prepend_mgr);
+            struct upipe *upipe_rtp_prepend =
+                upipe_void_alloc_output(
+                        upipe_ts_mux, upipe_rtp_prepend_mgr,
+                        uprobe_pfx_alloc(
+                            uprobe_use(uprobe_main), loglevel,
+                            "rtpp"));
+            upipe_mgr_release(upipe_rtp_prepend_mgr);
+            assert(upipe_rtp_prepend);
+        } else {
+            struct upipe *upipe_rtp_prepend = upipe_use(upipe_ts_mux);
+        }
 
         struct upipe_mgr *upipe_udpsink_mgr = upipe_udpsink_mgr_alloc();
         assert(upipe_udpsink_mgr);
@@ -323,9 +327,9 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
         ubase_assert(upipe_x264_set_default_preset(x264,
                     "ultrafast", "zerolatency"));
         ubase_assert(upipe_set_option(x264, "threads", "1"));
-        ubase_assert(upipe_set_option(x264, "bitrate", "12000"));
-        ubase_assert(upipe_set_option(x264, "vbv-maxrate", "12000"));
-        ubase_assert(upipe_set_option(x264, "vbv-bufsize", "12000"));
+        ubase_assert(upipe_set_option(x264, "bitrate", "600"));
+        ubase_assert(upipe_set_option(x264, "vbv-maxrate", "600"));
+        ubase_assert(upipe_set_option(x264, "vbv-bufsize", "600"));
         ubase_assert(upipe_set_option(x264, "repeat-headers", "1"));
         ubase_assert(upipe_set_option(x264, "nal-hrd", "vbr"));
         ubase_assert(upipe_set_option(x264, "keyint", "25"));
