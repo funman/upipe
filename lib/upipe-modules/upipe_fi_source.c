@@ -189,7 +189,7 @@ struct upipe_fisrc {
 
     int transfer_size;
 
-    struct fi_info *fi, *hints;
+    struct fi_info *fi;
     struct fid_fabric *fabric;
     struct fid_domain *domain;
     struct fid_ep *ep;
@@ -590,25 +590,23 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->max_msg_size = upipe_fisrc->transfer_size = 8961;
     upipe_fisrc->ctrl_packet_num = 0;
 
-    upipe_fisrc->hints = fi_allocinfo();
-    if (!upipe_fisrc->hints) {
+    struct fi_info *hints = fi_allocinfo();
+    if (!hints) {
     }
 
-    upipe_fisrc->hints->ep_attr->type = FI_EP_DGRAM;
-
-    upipe_fisrc->hints->caps = FI_MSG;
-    upipe_fisrc->hints->mode = FI_CONTEXT;
-    upipe_fisrc->hints->domain_attr->mr_mode =
+    hints->caps = FI_MSG;
+    hints->mode = FI_CONTEXT;
+    hints->domain_attr->mr_mode =
         FI_MR_LOCAL | FI_MR_ALLOCATED | FI_MR_PROV_KEY | FI_MR_VIRT_ADDR;
 
-    upipe_fisrc->hints->fabric_attr->prov_name = (char*)"sockets";
-    upipe_fisrc->hints->ep_attr->type = FI_EP_RDM;
-    upipe_fisrc->hints->domain_attr->resource_mgmt = FI_RM_ENABLED;
-    upipe_fisrc->hints->domain_attr->threading = FI_THREAD_DOMAIN;
-    upipe_fisrc->hints->rx_attr->comp_order = FI_ORDER_NONE;
+    hints->fabric_attr->prov_name = (char*)"sockets";
+    hints->ep_attr->type = FI_EP_RDM;
+    hints->domain_attr->resource_mgmt = FI_RM_ENABLED;
+    hints->domain_attr->threading = FI_THREAD_DOMAIN;
+    hints->rx_attr->comp_order = FI_ORDER_NONE;
 
     RET(fi_getinfo (FI_VERSION (FI_MAJOR_VERSION, FI_MINOR_VERSION),
-            NULL, NULL, FI_SOURCE /* ? */, upipe_fisrc->hints, &upipe_fisrc->fi));
+            NULL, NULL, FI_SOURCE /* ? */, hints, &upipe_fisrc->fi));
 
     RET(fi_fabric (upipe_fisrc->fi->fabric_attr, &upipe_fisrc->fabric, NULL));
     RET(fi_domain (upipe_fisrc->fabric, upipe_fisrc->fi, &upipe_fisrc->domain, NULL));
@@ -645,6 +643,9 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->buffered = 0;
     upipe_fisrc->width = 0;
     upipe_fisrc->height = 0;
+
+    hints->fabric_attr->prov_name = NULL; // Value is statically allocated, so don't want libfabric to free it.
+    fi_freeinfo (hints);
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -1516,7 +1517,6 @@ static void upipe_fisrc_free(struct upipe *upipe)
     free (upipe_fisrc->buf); // FIXME : munmap
 
     fi_freeinfo (upipe_fisrc->fi);
-//    fi_freeinfo (upipe_fisrc->hints); // FIXME
 
     upipe_throw_dead(upipe);
 
