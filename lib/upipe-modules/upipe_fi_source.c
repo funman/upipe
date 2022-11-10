@@ -215,10 +215,6 @@ struct upipe_fisrc {
     uint16_t pkt_num;
     char ip[INET6_ADDRSTRLEN];
 
-    // FIXME : can't work with out of order packets
-    uint8_t buffer[5];
-    size_t  buffered;
-
     size_t width;
     size_t height;
 
@@ -640,7 +636,6 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->probe_state = kProbeStateIdle;
     upipe_fisrc->pkt_num = 0;
     upipe_fisrc->ip[0] = '\0';
-    upipe_fisrc->buffered = 0;
     upipe_fisrc->width = 0;
     upipe_fisrc->height = 0;
 
@@ -1099,7 +1094,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
         static uint64_t start;
         if (offset == 0)
             start = systime;
-        if (offset + upipe_fisrc->buffered + s > 5184000) {
+        if (offset + s > 5184000) {
             upipe_dbg_va(upipe, "got pic after %.6f ms", ((float)(systime - start)) / 27000.);
         }
     }
@@ -1158,66 +1153,31 @@ static void upipe_fisrc_worker2(struct upump *upump)
         }
     }
 
-    offset -= (offset % 5);
+    static uint8_t x[5184000];
+    if (offset + s > 5184000)
+        s = 5184000 - offset;
+    memcpy(&x[offset], buffer, s);
 
-    if (offset + upipe_fisrc->buffered + s > 5184000) {
-        if (offset + upipe_fisrc->buffered + s > 5184000 + 8191)
-        upipe_err_va(upipe, "OVERFLOW offset %zu, s %zu buffered %zu", offset, s, upipe_fisrc->buffered);
-        s = 5184000 - offset - upipe_fisrc->buffered;
+    if (offset + s == 5184000) {
+        const uint8_t *src = x;
+        for (int i = 0; i < 1920*1080; i += 2) {
+            uint8_t a = *src++;
+            uint8_t b = *src++;
+            uint8_t c = *src++;
+            uint8_t d = *src++;
+            uint8_t e = *src++;
+            u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
+            y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
+            v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
+            y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
+         }
     }
-
-
-    uint8_t *src = buffer;
-    int i = offset / 5 * 2;
-
-    if (upipe_fisrc->buffered && s >= 5 - upipe_fisrc->buffered) {
-        memcpy(&upipe_fisrc->buffer[upipe_fisrc->buffered], src, 5 - upipe_fisrc->buffered);
-        src += 5 - upipe_fisrc->buffered;
-
-        uint8_t a = upipe_fisrc->buffer[0];
-        uint8_t b = upipe_fisrc->buffer[1];
-        uint8_t c = upipe_fisrc->buffer[2];
-        uint8_t d = upipe_fisrc->buffer[3];
-        uint8_t e = upipe_fisrc->buffer[4];
-        u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
-        y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
-        v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
-        y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
-
-        i += 2;
-        s -= 5 - upipe_fisrc->buffered;
-        offset += 5;
-    }
-
-    while (s >= 5) {
-        uint8_t a = *src++;
-        uint8_t b = *src++;
-        uint8_t c = *src++;
-        uint8_t d = *src++;
-        uint8_t e = *src++;
-        u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
-        y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
-        v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
-        y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
-
-        i += 2;
-        s -= 5;
-        offset += 5;
-    }
-
-    upipe_fisrc->buffered = s;
-    if (s)
-        memcpy(upipe_fisrc->buffer, src, s);
 
     uref_pic_plane_unmap(uref, "y10l", 0, 0, -1, -1);
     uref_pic_plane_unmap(uref, "u10l", 0, 0, -1, -1);
     uref_pic_plane_unmap(uref, "v10l", 0, 0, -1, -1);
 
-    if (offset >= 5184000) {
-        if (offset > 5184000)
-            upipe_err_va(upipe, "%zu too big", offset - 5184000);
-        offset = 0;
-        upipe_fisrc->buffered = 0;
+    if (offset + s >= 5184000) {
         upipe_fisrc->output_uref = NULL;
         upipe_fisrc_output(upipe, uref, &upipe_fisrc->upump);
     }
