@@ -1166,37 +1166,6 @@ static void upipe_fisrc_worker2(struct upump *upump)
     }
 
 
-    if (0 && s) {
-        bool c = false;
-        static int x;
-        static FILE *f;
-        if (!f) {
-            f = fopen("/home/fun/dump.raw", "w");
-            assert(f);
-        }
-        if (c)
-            fprintf(f, "pkt_%d[%zu] = {\n", x++, s);
-
-        int m = 0;
-        for (unsigned i = 0; i < s; i++) {
-            if (c)
-                fprintf(f, "0x%.2x, ", buffer[i]);
-            else
-                fputc(buffer[i], f);
-            if (c && ++m && (i & 15) == 15) {
-                fprintf(f, "\n");
-                m = 0;
-            }
-        }
-        if (c) {
-            if (m)
-                fprintf(f, "\n");
-
-            fprintf(f, "};\n");
-        }
-        fflush(f);
-    }
-
     uint8_t *src = buffer;
     int i = offset / 5 * 2;
 
