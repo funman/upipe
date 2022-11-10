@@ -325,13 +325,13 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
         assert(x264);
         ubase_assert(upipe_x264_set_profile(x264, "baseline"));
         ubase_assert(upipe_x264_set_default_preset(x264,
-                    "ultrafast", "zerolatency"));
-        ubase_assert(upipe_set_option(x264, "threads", "1"));
-        ubase_assert(upipe_set_option(x264, "bitrate", "600"));
-        ubase_assert(upipe_set_option(x264, "vbv-maxrate", "600"));
-        ubase_assert(upipe_set_option(x264, "vbv-bufsize", "600"));
+                    "fast", "zerolatency"));
+        ubase_assert(upipe_set_option(x264, "threads", "4"));
+        ubase_assert(upipe_set_option(x264, "bitrate", "1500"));
+        ubase_assert(upipe_set_option(x264, "vbv-maxrate", "1500"));
+        ubase_assert(upipe_set_option(x264, "vbv-bufsize", "1500"));
         ubase_assert(upipe_set_option(x264, "repeat-headers", "1"));
-        ubase_assert(upipe_set_option(x264, "nal-hrd", "vbr"));
+        ubase_assert(upipe_set_option(x264, "nal-hrd", "cbr"));
         ubase_assert(upipe_set_option(x264, "keyint", "25"));
         ubase_assert(upipe_set_option(x264, "intra-refresh", "1"));
 
