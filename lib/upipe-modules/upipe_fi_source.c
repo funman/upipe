@@ -107,6 +107,7 @@
 
 /** default size of buffers when unspecified */
 #define UBUF_DEFAULT_SIZE      8961
+#define UBUF_DEFAULT_SIZE_A    8968
 
 #define UDP_DEFAULT_TTL 0
 #define FI_DEFAULT_PORT 47592
@@ -476,8 +477,8 @@ static ssize_t rx (struct upipe *upipe)
     uint64_t n = upipe_fisrc->rx_cq_cntr % 3000;
 
     struct iovec msg_iov = {
-        .iov_base = (uint8_t*)upipe_fisrc->rx_buf + n * 8968,
-        .iov_len = 8961,
+        .iov_base = (uint8_t*)upipe_fisrc->rx_buf + n * UBUF_DEFAULT_SIZE_A,
+        .iov_len = UBUF_DEFAULT_SIZE,
     };
 
     struct fi_msg msg = {
@@ -513,11 +514,11 @@ static int alloc_msgs (struct upipe *upipe)
     const unsigned int size_max_power_two = 22;
     const size_t max_msg_size = upipe_fisrc->fi->ep_attr->max_msg_size;
     static const unsigned int packet_buffer_alignment = 8;
-    static const unsigned int packet_size = 8961;
+    static const unsigned int packet_size = UBUF_DEFAULT_SIZE;
     static const unsigned int packet_count = 3000;
 
     const int aligned_packet_size = (packet_size + packet_buffer_alignment - 1) & ~(packet_buffer_alignment - 1);
-    assert(aligned_packet_size == 8968);
+    assert(aligned_packet_size == UBUF_DEFAULT_SIZE_A);
     int allocated_size = aligned_packet_size * packet_count;
 
     upipe_fisrc->x_size = (1 << size_max_power_two) + (1 << (size_max_power_two - 1));
@@ -586,7 +587,7 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->src_port = FI_DEFAULT_PORT+1;
     upipe_fisrc->dst_port = FI_DEFAULT_PORT;
 
-    upipe_fisrc->max_msg_size = upipe_fisrc->transfer_size = 8961;
+    upipe_fisrc->max_msg_size = upipe_fisrc->transfer_size = UBUF_DEFAULT_SIZE;
     upipe_fisrc->ctrl_packet_num = 0;
 
     struct fi_info *hints = fi_allocinfo();
@@ -1017,7 +1018,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
     struct uref *uref = upipe_fisrc->output_uref;
 
     uint64_t n = upipe_fisrc->rx_cq_cntr % 3000;
-    uint8_t *buffer = upipe_fisrc->rx_buf + n * 8968;
+    uint8_t *buffer = upipe_fisrc->rx_buf + n * UBUF_DEFAULT_SIZE_A;
     ssize_t s = rx(upipe);
 
     size_t offset = 0;
@@ -1025,7 +1026,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
         return;
 
     assert(s >= 9);
-    assert(s == 8961);
+    assert(s == UBUF_DEFAULT_SIZE);
 
     uint8_t pt = buffer[0];
     uint16_t seq = get_16le(&buffer[1]);
