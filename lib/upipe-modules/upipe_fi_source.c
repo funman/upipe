@@ -468,7 +468,7 @@ static ssize_t rx (struct upipe *upipe)
     if (get_cq_comp (upipe_fisrc->rxcq, &upipe_fisrc->rx_cq_cntr, upipe_fisrc->rx_seq))
         return -1;
 
-    uint64_t n = upipe_fisrc->rx_cq_cntr % 3000;
+    uint64_t n = upipe_fisrc->rx_cq_cntr % 580;
 
     struct iovec msg_iov = {
         .iov_base = (uint8_t*)upipe_fisrc->rx_buf + n * UBUF_DEFAULT_SIZE_A,
@@ -507,7 +507,7 @@ static int alloc_msgs (struct upipe *upipe)
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
     static const unsigned int packet_buffer_alignment = 8;
     static const unsigned int packet_size = UBUF_DEFAULT_SIZE;
-    static const unsigned int packet_count = 3000;
+    static const unsigned int packet_count = 580;
 
     const int aligned_packet_size = (packet_size + packet_buffer_alignment - 1) & ~(packet_buffer_alignment - 1);
     assert(aligned_packet_size == UBUF_DEFAULT_SIZE_A);
@@ -1001,7 +1001,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
         systime = uclock_now(upipe_fisrc->uclock);
     struct uref *uref = upipe_fisrc->output_uref;
 
-    uint64_t n = upipe_fisrc->rx_cq_cntr % 3000;
+    uint64_t n = upipe_fisrc->rx_cq_cntr % 580;
     uint8_t *buffer = upipe_fisrc->rx_buf + n * UBUF_DEFAULT_SIZE_A;
     ssize_t s = rx(upipe);
 
