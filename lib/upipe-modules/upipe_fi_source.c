@@ -452,7 +452,6 @@ static int get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total)
 
             fprintf(stderr, "X %s\n", fi_cq_strerror (cq, cq_err.prov_errno,
                         cq_err.err_data, NULL, 0));
-            exit(1);
             return -cq_err.err;
         } else if (ret < 0) {
             fprintf(stderr, "%s(): ret=%d (%s)\n", "get_cq_comp", ret, fi_strerror(-ret));
