@@ -426,15 +426,15 @@ static void upipe_fisrc_parse_cmd(struct upipe *upipe, const uint8_t *buf, size_
 
 static int get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total)
 {
-    struct fi_cq_data_entry comp;
+    struct fi_cq_data_entry comp[1];
 
     int z = 0;
     do {
-        int ret = fi_cq_read (cq, &comp, 1);
+        int ret = fi_cq_read (cq, &comp, sizeof(comp) / sizeof(*comp));
         if (ret > 0) {
             if (ret != 1)
                 printf("cq_read %d\n", ret);
-            (*cur)++;
+            (*cur) += ret;
         } else if (ret == -FI_EAGAIN) {
             if (z++ > 10)
                 return 1;
