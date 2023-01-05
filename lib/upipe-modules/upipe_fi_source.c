@@ -183,7 +183,6 @@ struct upipe_fisrc {
     struct sockaddr_in dst;
 
 ////
-    int max_msg_size;
     uint16_t src_port;
     uint16_t dst_port;
     char *dst_addr;
@@ -506,8 +505,6 @@ do {                    \
 static int alloc_msgs (struct upipe *upipe)
 {
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
-    const unsigned int size_max_power_two = 22;
-    const size_t max_msg_size = upipe_fisrc->fi->ep_attr->max_msg_size;
     static const unsigned int packet_buffer_alignment = 8;
     static const unsigned int packet_size = UBUF_DEFAULT_SIZE;
     static const unsigned int packet_count = 3000;
@@ -516,11 +513,7 @@ static int alloc_msgs (struct upipe *upipe)
     assert(aligned_packet_size == UBUF_DEFAULT_SIZE_A);
     int allocated_size = aligned_packet_size * packet_count;
 
-    upipe_fisrc->x_size = (1 << size_max_power_two) + (1 << (size_max_power_two - 1));
     upipe_fisrc->x_size = allocated_size;
-
-    if (upipe_fisrc->x_size > max_msg_size)
-        upipe_fisrc->x_size = max_msg_size;
 
     size_t buf_size = upipe_fisrc->x_size;
 
@@ -577,12 +570,9 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->rx_cq_cntr = 0;
     upipe_fisrc->output_uref = NULL;
 
-    upipe_fisrc->max_msg_size = 0;
-
     upipe_fisrc->src_port = FI_DEFAULT_PORT+1;
     upipe_fisrc->dst_port = FI_DEFAULT_PORT;
 
-    upipe_fisrc->max_msg_size = upipe_fisrc->transfer_size = UBUF_DEFAULT_SIZE;
     upipe_fisrc->ctrl_packet_num = 0;
 
     struct fi_info *hints = fi_allocinfo();
