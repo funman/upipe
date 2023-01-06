@@ -587,6 +587,7 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     hints->ep_attr->type = FI_EP_RDM;
     hints->domain_attr->resource_mgmt = FI_RM_ENABLED;
     hints->domain_attr->threading = FI_THREAD_DOMAIN;
+    hints->domain_attr->data_progress = FI_PROGRESS_MANUAL;
     hints->rx_attr->comp_order = FI_ORDER_NONE;
 
     RET(fi_getinfo (FI_VERSION (FI_MAJOR_VERSION, FI_MINOR_VERSION),
