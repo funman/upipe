@@ -440,7 +440,6 @@ static int get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total)
                 return 1;
             continue;
         } else if (ret == -FI_EAVAIL) {
-            (*cur)++;
             struct fi_cq_err_entry cq_err = { 0 };
 
             int ret = fi_cq_readerr (cq, &cq_err, 0);
