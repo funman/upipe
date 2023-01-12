@@ -1099,9 +1099,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
     if (!go)
         return;
 
-    bool uref_new = false;
     if (unlikely(uref == NULL)) {
-        uref_new = true;
         uref = uref_pic_alloc(upipe_fisrc->uref_mgr, upipe_fisrc->ubuf_mgr,
                 upipe_fisrc->width, upipe_fisrc->height);
         if (unlikely(uref == NULL)) {
@@ -1125,21 +1123,6 @@ static void upipe_fisrc_worker2(struct upump *upump)
     }
     if (!ubase_check(uref_pic_plane_write(uref, "v10l", 0, 0, -1, -1, (uint8_t**)&v))) {
         upipe_err(upipe, "Cannot map v");
-    }
-
-    if (uref_new) {
-        //{ 0xF0, 0x0A, 0x46, 0xE0, 0xA4 }, // Blue
-        uint8_t a = 0xf0, b = 0x0a, c = 0x46, d = 0xe0, e = 0xa4;
-        uint16_t u1 = (a << 2)          | ((b >> 6) & 0x03); //1111111122
-        uint16_t y1 = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
-        uint16_t v1 = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
-        uint16_t y2 = ((d & 0x03) << 8) | e;                 //4455555555
-        for (int i = 0; i < 1920*1080/2; i++) {
-            u[i] = u1;
-            v[i] = v1;
-            y[2*i] = y1;
-            y[2*i+1] = y2;
-        }
     }
 
     static uint8_t x[5184000];
