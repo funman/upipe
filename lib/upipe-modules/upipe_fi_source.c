@@ -183,7 +183,6 @@ struct upipe_fisrc {
     struct sockaddr_in dst;
 
 ////
-    uint16_t src_port;
     uint16_t dst_port;
     char *dst_addr;
 
@@ -569,7 +568,6 @@ static struct upipe *upipe_fisrc_alloc(struct upipe_mgr *mgr,
     upipe_fisrc->rx_cq_cntr = 0;
     upipe_fisrc->output_uref = NULL;
 
-    upipe_fisrc->src_port = FI_DEFAULT_PORT+1;
     upipe_fisrc->dst_port = FI_DEFAULT_PORT;
 
     upipe_fisrc->ctrl_packet_num = 0;
@@ -677,7 +675,7 @@ static void transmit(struct upipe *upipe, ProbeCommand cmd, bool requires_ack, P
     buf += CDI_MAX_STREAM_NAME_STRING_LENGTH;
 
     // senders_control_dest_port
-    uint16_t port = 47593; // TODO
+    uint16_t port = upipe_fisrc->dst_port;
     put_16le(buf, port);
     buf += 2;
 
@@ -1320,6 +1318,12 @@ static int upipe_fisrc_set_uri(struct upipe *upipe, const char *uri)
 
     if (unlikely(uri == NULL))
         return UBASE_ERR_NONE;
+
+    upipe_fisrc->dst_port = FI_DEFAULT_PORT;
+    char *colon = strrchr(uri, ':');
+    if (colon) {
+        upipe_fisrc->dst_port = atoi(colon+1);
+    }
 
     upipe_fisrc->fd = upipe_udp_open_socket(upipe, uri,
             UDP_DEFAULT_TTL, FI_DEFAULT_PORT, 0, NULL, &use_tcp, NULL, NULL);
