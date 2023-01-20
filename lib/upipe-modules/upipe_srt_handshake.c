@@ -40,6 +40,10 @@
 #include "upipe/upipe_helper_output.h"
 #include "upipe-modules/upipe_srt_handshake.h"
 
+#include <bitstream/haivision/srt.h>
+
+#include <arpa/inet.h>
+
 /** @hidden */
 static int upipe_srths_check(struct upipe *upipe, struct uref *flow_format);
 
@@ -69,8 +73,10 @@ struct upipe_srths {
     /** list of output requests */
     struct uchain request_list;
 
-    /** SRT handshake uri */
-    char *uri;
+    uint32_t syn_cookie;
+    uint32_t socket_id;
+
+    bool expect_conclusion;
 
     /** public upipe structure */
     struct upipe upipe;
@@ -104,11 +110,17 @@ static struct upipe *upipe_srths_alloc(struct upipe_mgr *mgr,
 {
     struct upipe *upipe = upipe_srths_alloc_void(mgr, uprobe, signature, args);
     struct upipe_srths *upipe_srths = upipe_srths_from_upipe(upipe);
+
     upipe_srths_init_urefcount(upipe);
     upipe_srths_init_uref_mgr(upipe);
     upipe_srths_init_ubuf_mgr(upipe);
     upipe_srths_init_output(upipe);
-    upipe_srths->uri = NULL;
+
+    // FIXME
+    upipe_srths->socket_id = 0;
+    upipe_srths->syn_cookie = 1;
+    upipe_srths->expect_conclusion = false;
+
     upipe_throw_ready(upipe);
     return upipe;
 }
@@ -145,41 +157,31 @@ static int upipe_srths_check(struct upipe *upipe, struct uref *flow_format)
     return UBASE_ERR_NONE;
 }
 
-/** @internal @This returns the uri of the currently opened SRT handshake.
+/** @internal @This sets the input flow definition.
  *
  * @param upipe description structure of the pipe
- * @param uri_p filled in with the uri of the SRT handshake
+ * @param flow_def flow definition packet
  * @return an error code
  */
-static int upipe_srths_get_uri(struct upipe *upipe, const char **uri_p)
+static int upipe_srths_set_flow_def(struct upipe *upipe, struct uref *flow_def)
 {
-    struct upipe_srths *upipe_srths = upipe_srths_from_upipe(upipe);
-    assert(uri_p != NULL);
-    *uri_p = upipe_srths->uri;
-    return UBASE_ERR_NONE;
-}
+    if (flow_def == NULL)
+        return UBASE_ERR_INVALID;
 
-/** @internal @This asks to open the given SRT handshake.
- *
- * @param upipe description structure of the pipe
- * @param uri relative or absolute uri of the SRT handshake
- * @return an error code
- */
-static int upipe_srths_set_uri(struct upipe *upipe, const char *uri)
-{
-    struct upipe_srths *upipe_srths = upipe_srths_from_upipe(upipe);
+    const char *def;
+    UBASE_RETURN(uref_flow_get_def(flow_def, &def))
 
-    ubase_clean_str(&upipe_srths->uri);
-
-    if (unlikely(uri == NULL))
-        return UBASE_ERR_NONE;
-
-    upipe_srths->uri = strdup(uri);
-    if (unlikely(upipe_srths->uri == NULL)) {
-        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
-        return UBASE_ERR_ALLOC;
+    if (ubase_ncmp(def, "block.")) {
+        upipe_err_va(upipe, "Unknown def %s", def);
+        return UBASE_ERR_INVALID;
     }
-    upipe_notice_va(upipe, "opening SRT handshake %s", upipe_srths->uri);
+
+    flow_def = uref_dup(flow_def);
+    if (!flow_def)
+        return UBASE_ERR_ALLOC;
+
+    upipe_srths_store_flow_def(upipe, flow_def);
+
     return UBASE_ERR_NONE;
 }
 
@@ -199,14 +201,11 @@ static int _upipe_srths_control(struct upipe *upipe,
         case UPIPE_SET_OUTPUT:
             return upipe_srths_control_output(upipe, command, args);
 
-        case UPIPE_GET_URI: {
-            const char **uri_p = va_arg(args, const char **);
-            return upipe_srths_get_uri(upipe, uri_p);
+        case UPIPE_SET_FLOW_DEF: {
+            struct uref *flow = va_arg(args, struct uref *);
+            return upipe_srths_set_flow_def(upipe, flow);
         }
-        case UPIPE_SET_URI: {
-            const char *uri = va_arg(args, const char *);
-            return upipe_srths_set_uri(upipe, uri);
-        }
+
         default:
             return UBASE_ERR_UNHANDLED;
     }
@@ -227,17 +226,208 @@ static int upipe_srths_control(struct upipe *upipe, int command, va_list args)
     return upipe_srths_check(upipe, NULL);
 }
 
+static const char ctrl_type[][10] =
+{
+    [SRT_CONTROL_TYPE_HANDSHAKE] = "handshake",
+    [SRT_CONTROL_TYPE_KEEPALIVE] = "keepalive",
+    [SRT_CONTROL_TYPE_ACK] = "ack",
+    [SRT_CONTROL_TYPE_NAK] = "nak",
+    [SRT_CONTROL_TYPE_SHUTDOWN] = "shutdown",
+    [SRT_CONTROL_TYPE_ACKACK] = "ackack",
+    [SRT_CONTROL_TYPE_DROPREQ] = "dropreq",
+    [SRT_CONTROL_TYPE_PEERERROR] = "peererror",
+};
+
+static const char *get_ctrl_type(uint16_t type)
+{
+    if (type == SRT_CONTROL_TYPE_USER)
+        return "user";
+    if (type >= (sizeof(ctrl_type) / sizeof(*ctrl_type)))
+        return "?";
+    return ctrl_type[type];
+}
+
+static void upipe_srths_input(struct upipe *upipe, struct uref *uref,
+        struct upump **upump_p)
+{
+    struct upipe_srths *upipe_srths = upipe_srths_from_upipe(upipe);
+
+    size_t total_size;
+    ubase_assert(uref_block_size(uref, &total_size));
+
+    int offset = 0;
+    while (total_size) {
+        const uint8_t *buf;
+        int size = total_size;
+
+        ubase_assert(uref_block_read(uref, offset, &size, &buf));
+
+        if (size < SRT_HEADER_SIZE) {
+            upipe_err_va(upipe, "Packet too small (%d)", size);
+            goto skip;
+        }
+
+        if (srt_get_packet_control(buf)) {
+            uint16_t type = srt_get_control_packet_type(buf);
+            printf("control %s\n", get_ctrl_type(type));
+            if (type == SRT_CONTROL_TYPE_HANDSHAKE) {
+                const uint8_t *cif = srt_get_control_packet_cif(buf);
+                if (!srt_check_handshake(cif, size - SRT_HEADER_SIZE)) {
+                    upipe_err(upipe, "Malformed handshake");
+                    goto skip;
+                }
+                uint32_t version = srt_get_handshake_version(cif);
+                uint16_t encryption = srt_get_handshake_encryption(cif);
+                uint16_t extension = srt_get_handshake_extension(cif);
+                uint32_t hs_type = srt_get_handshake_type(cif);
+                uint32_t syn_cookie = srt_get_handshake_syn_cookie(cif);
+                uint32_t dst_socket_id = srt_get_packet_dst_socket_id(buf);
+
+                if (!upipe_srths->expect_conclusion) {
+                    if (version != 4 || encryption != SRT_HANDSHAKE_CIPHER_NONE
+                            || extension != SRT_HANDSHAKE_EXT_KMREQ 
+                            || hs_type != SRT_HANDSHAKE_TYPE_INDUCTION ||
+                            syn_cookie != 0 || dst_socket_id != 0) {
+                        upipe_err(upipe, "Malformed handshake");
+                        goto skip;
+                    }
+
+                    uint32_t socket_id = srt_get_handshake_socket_id(cif);
+                    struct sockaddr_storage addr;
+                    srt_get_handshake_ip(cif, (struct sockaddr *)&addr);
+                    char ip_str[INET6_ADDRSTRLEN];
+                    if (addr.ss_family == AF_INET) {
+                        inet_ntop(AF_INET, &(((struct sockaddr_in *)&addr)->sin_addr),
+                                ip_str, sizeof(ip_str));
+                    } else {
+                        inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)&addr)->sin6_addr),
+                                ip_str, sizeof(ip_str));
+                    }
+
+                    printf("%s : 0x%08x\n", ip_str, socket_id);
+
+                    //
+                    struct uref *uref = uref_block_alloc(upipe_srths->uref_mgr,
+                            upipe_srths->ubuf_mgr, SRT_HEADER_SIZE + SRT_HANDSHAKE_CIF_SIZE);
+                    if (!uref)
+                        goto skip;
+                    uint8_t *out;
+                    int output_size = -1;
+                    if (unlikely(!ubase_check(uref_block_write(uref, 0, &output_size, &out)))) {
+                        uref_free(uref);
+                        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+                    }
+
+                    srt_set_packet_control(out, true);
+                    srt_set_packet_timestamp(out, 0); // TODO
+                    srt_set_packet_dst_socket_id(out, 0);
+                    srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
+                    srt_set_control_packet_subtype(out, 0);
+                    srt_set_control_packet_type_specific(out, 0);
+                    uint8_t *out_cif = (uint8_t*)srt_get_control_packet_cif(out);
+
+                    srt_set_handshake_version(out_cif, SRT_HANDSHAKE_VERSION);
+                    srt_set_handshake_encryption(out_cif, SRT_HANDSHAKE_CIPHER_NONE);
+                    srt_set_handshake_extension(out_cif, SRT_MAGIC_CODE);
+                    srt_set_handshake_type(out_cif, SRT_HANDSHAKE_TYPE_INDUCTION);
+                    srt_set_handshake_syn_cookie(out_cif, upipe_srths->syn_cookie);
+                    srt_set_handshake_socket_id(out_cif, upipe_srths->socket_id);
+
+                    upipe_srths->expect_conclusion = true;
+
+                    uref_block_unmap(uref, 0);
+                    upipe_srths_output(upipe, uref, upump_p);
+                } else {
+                    if (version != 5 || encryption != SRT_HANDSHAKE_CIPHER_NONE
+                            || hs_type != SRT_HANDSHAKE_TYPE_CONCLUSION
+                            || syn_cookie != upipe_srths->syn_cookie
+                            || dst_socket_id != upipe_srths->socket_id) {
+                        upipe_err(upipe, "Malformed conclusion handshake");
+                        upipe_srths->expect_conclusion = false;
+                        goto skip;
+                    }
+
+                    //uint32_t socket_id = srt_get_handshake_socket_id(cif);
+                    struct sockaddr_storage addr;
+                    srt_get_handshake_ip(cif, (struct sockaddr *)&addr);
+                    char ip_str[INET6_ADDRSTRLEN];
+                    if (addr.ss_family == AF_INET) {
+                        inet_ntop(AF_INET, &(((struct sockaddr_in *)&addr)->sin_addr),
+                                ip_str, sizeof(ip_str));
+                    } else {
+                        inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)&addr)->sin6_addr),
+                                ip_str, sizeof(ip_str));
+                    }
+
+                    struct uref *uref = uref_block_alloc(upipe_srths->uref_mgr,
+                            upipe_srths->ubuf_mgr, size);
+                    if (!uref)
+                        goto skip;
+                    uint8_t *out;
+                    int output_size = -1;
+                    if (unlikely(!ubase_check(uref_block_write(uref, 0, &output_size, &out)))) {
+                        uref_free(uref);
+                        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+                    }
+
+                    srt_set_packet_control(out, true);
+                    srt_set_packet_timestamp(out, 0);
+                    srt_set_packet_dst_socket_id(out, 0);
+                    srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
+                    srt_set_control_packet_subtype(out, 0);
+                    srt_set_control_packet_type_specific(out, 0);
+                    uint8_t *out_cif = (uint8_t*)srt_get_control_packet_cif(out);
+
+                    srt_set_handshake_version(out_cif, SRT_HANDSHAKE_VERSION);
+                    srt_set_handshake_encryption(out_cif, SRT_HANDSHAKE_CIPHER_NONE);
+                    srt_set_handshake_extension(out_cif, extension);
+                    srt_set_handshake_type(out_cif, SRT_HANDSHAKE_TYPE_CONCLUSION);
+                    srt_set_handshake_syn_cookie(out_cif, 0);
+                    srt_set_handshake_socket_id(out_cif, upipe_srths->socket_id);
+                    srt_set_handshake_isn(out_cif, srt_get_handshake_isn(cif));
+                    srt_set_handshake_mtu(out_cif, srt_get_handshake_mtu(cif));
+                    srt_set_handshake_mfw(out_cif, srt_get_handshake_mfw(cif));
+
+                    // TODO: peer
+                    srt_set_handshake_extension_type(out_cif, srt_get_handshake_extension_type(cif));
+                    uint16_t ext_len = srt_get_handshake_extension_len(cif);
+                    srt_set_handshake_extension_len(out_cif, ext_len);
+
+                    // TODO : interpret ext
+                    memcpy(((uint8_t*)srt_get_handshake_extension_buf(out_cif)),
+                            srt_get_handshake_extension_buf(cif),
+                            4 * ext_len);
+
+                    upipe_srths->expect_conclusion = false;
+
+                    uref_block_unmap(uref, 0);
+                    upipe_srths_output(upipe, uref, upump_p);
+                }
+            } else if (type == SRT_CONTROL_TYPE_KEEPALIVE) {
+            } else if (type == SRT_CONTROL_TYPE_ACK) {
+            } else if (type == SRT_CONTROL_TYPE_NAK) {
+            }
+        } else {
+            printf("data\n");
+        }
+
+skip:
+        ubase_assert(uref_block_unmap(uref, offset));
+        offset += size;
+        total_size -= size;
+    }
+
+    uref_free(uref);
+}
+
 /** @This frees a upipe.
  *
  * @param upipe description structure of the pipe
  */
 static void upipe_srths_free(struct upipe *upipe)
 {
-    struct upipe_srths *upipe_srths = upipe_srths_from_upipe(upipe);
-
     upipe_throw_dead(upipe);
 
-    free(upipe_srths->uri);
     upipe_srths_clean_output(upipe);
     upipe_srths_clean_ubuf_mgr(upipe);
     upipe_srths_clean_uref_mgr(upipe);
@@ -251,7 +441,7 @@ static struct upipe_mgr upipe_srths_mgr = {
     .signature = UPIPE_SRT_HANDSHAKE_SIGNATURE,
 
     .upipe_alloc = upipe_srths_alloc,
-    .upipe_input = NULL,
+    .upipe_input = upipe_srths_input,
     .upipe_control = upipe_srths_control,
 
     .upipe_mgr_control = NULL
