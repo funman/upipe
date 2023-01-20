@@ -33,7 +33,9 @@
 #include "upipe/uref_block_flow.h"
 #include "upipe/upipe.h"
 #include "upipe/upipe_helper_upipe.h"
+#include "upipe/upipe_helper_subpipe.h"
 #include "upipe/upipe_helper_urefcount.h"
+#include "upipe/upipe_helper_urefcount_real.h"
 #include "upipe/upipe_helper_void.h"
 #include "upipe/upipe_helper_uref_mgr.h"
 #include "upipe/upipe_helper_ubuf_mgr.h"
@@ -49,8 +51,14 @@ static int upipe_srths_check(struct upipe *upipe, struct uref *flow_format);
 
 /** @internal @This is the private context of a SRT handshake pipe. */
 struct upipe_srths {
-    /** refcount management structure */
+    /** real refcount management structure */
+    struct urefcount urefcount_real;
+    /** refcount management structure exported to the public structure */
     struct urefcount urefcount;
+
+    struct upipe_mgr sub_mgr;
+    /** list of output subpipes */
+    struct uchain outputs;
 
     /** uref manager */
     struct uref_mgr *uref_mgr;
@@ -78,12 +86,16 @@ struct upipe_srths {
 
     bool expect_conclusion;
 
+    struct upipe *srths_output;
+
     /** public upipe structure */
     struct upipe upipe;
 };
 
 UPIPE_HELPER_UPIPE(upipe_srths, upipe, UPIPE_SRT_HANDSHAKE_SIGNATURE)
-UPIPE_HELPER_UREFCOUNT(upipe_srths, urefcount, upipe_srths_free)
+UPIPE_HELPER_UREFCOUNT(upipe_srths, urefcount, upipe_srths_no_input)
+UPIPE_HELPER_UREFCOUNT_REAL(upipe_srths, urefcount_real, upipe_srths_free);
+
 UPIPE_HELPER_VOID(upipe_srths)
 
 UPIPE_HELPER_OUTPUT(upipe_srths, output, flow_def, output_state, request_list)
@@ -95,6 +107,236 @@ UPIPE_HELPER_UBUF_MGR(upipe_srths, ubuf_mgr, flow_format, ubuf_mgr_request,
                       upipe_srths_check,
                       upipe_srths_register_output_request,
                       upipe_srths_unregister_output_request)
+
+/** @internal @This is the private context of a SRT handshake output pipe. */
+struct upipe_srths_output {
+    /** refcount management structure */
+    struct urefcount urefcount;
+    /** structure for double-linked lists */
+    struct uchain uchain;
+
+    /** uref manager */
+    struct uref_mgr *uref_mgr;
+    /** uref manager request */
+    struct urequest uref_mgr_request;
+
+    /** ubuf manager */
+    struct ubuf_mgr *ubuf_mgr;
+    /** flow format packet */
+    struct uref *flow_format;
+    /** ubuf manager request */
+    struct urequest ubuf_mgr_request;
+
+    /** pipe acting as output */
+    struct upipe *output;
+    /** flow definition packet */
+    struct uref *flow_def;
+    /** output state */
+    enum upipe_helper_output_state output_state;
+    /** list of output requests */
+    struct uchain request_list;
+
+    /** public upipe structure */
+    struct upipe upipe;
+};
+
+static int upipe_srths_output_check(struct upipe *upipe, struct uref *flow_format);
+UPIPE_HELPER_UPIPE(upipe_srths_output, upipe, UPIPE_SRT_HANDSHAKE_OUTPUT_SIGNATURE)
+UPIPE_HELPER_VOID(upipe_srths_output);
+UPIPE_HELPER_UREFCOUNT(upipe_srths_output, urefcount, upipe_srths_output_free)
+UPIPE_HELPER_OUTPUT(upipe_srths_output, output, flow_def, output_state, request_list)
+UPIPE_HELPER_UREF_MGR(upipe_srths_output, uref_mgr, uref_mgr_request,
+                      upipe_srths_output_check,
+                      upipe_srths_output_register_output_request,
+                      upipe_srths_output_unregister_output_request)
+UPIPE_HELPER_UBUF_MGR(upipe_srths_output, ubuf_mgr, flow_format, ubuf_mgr_request,
+                      upipe_srths_output_check,
+                      upipe_srths_output_register_output_request,
+                      upipe_srths_output_unregister_output_request)
+UPIPE_HELPER_SUBPIPE(upipe_srths, upipe_srths_output, output, sub_mgr, outputs,
+                     uchain)
+
+static int upipe_srths_output_check(struct upipe *upipe, struct uref *flow_format)
+{
+    struct upipe_srths_output *upipe_srths_output = upipe_srths_output_from_upipe(upipe);
+    if (flow_format)
+        upipe_srths_output_store_flow_def(upipe, flow_format);
+
+    if (upipe_srths_output->uref_mgr == NULL) {
+        upipe_srths_output_require_uref_mgr(upipe);
+        return UBASE_ERR_NONE;
+    }
+
+    if (upipe_srths_output->ubuf_mgr == NULL) {
+        struct uref *flow_format =
+            uref_block_flow_alloc_def(upipe_srths_output->uref_mgr, NULL);
+        if (unlikely(flow_format == NULL)) {
+            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+            return UBASE_ERR_ALLOC;
+        }
+        upipe_srths_output_require_ubuf_mgr(upipe, flow_format);
+        return UBASE_ERR_NONE;
+    }
+
+    return UBASE_ERR_NONE;
+}
+
+/** @This is called when there is no external reference to the pipe anymore.
+ *
+ * @param upipe description structure of the pipe
+ */
+static void upipe_srths_no_input(struct upipe *upipe)
+{
+    upipe_srths_throw_sub_outputs(upipe, UPROBE_SOURCE_END);
+    upipe_srths_release_urefcount_real(upipe);
+}
+/** @internal @This allocates an output subpipe of a dup pipe.
+ *
+ * @param mgr common management structure
+ * @param uprobe structure used to raise events
+ * @param signature signature of the pipe allocator
+ * @param args optional arguments
+ * @return pointer to upipe or NULL in case of allocation error
+ */
+static struct upipe *upipe_srths_output_alloc(struct upipe_mgr *mgr,
+                                            struct uprobe *uprobe,
+                                            uint32_t signature, va_list args)
+{
+    if (mgr->signature != UPIPE_SRT_HANDSHAKE_OUTPUT_SIGNATURE)
+        return NULL;
+
+    struct upipe_srths *upipe_srths = upipe_srths_from_sub_mgr(mgr);
+    if (upipe_srths->srths_output)
+        return NULL;
+
+    struct upipe *upipe = upipe_srths_output_alloc_void(mgr, uprobe, signature, args);
+    if (unlikely(upipe == NULL))
+        return NULL;
+
+//    struct upipe_srths_output *upipe_srths_output = upipe_srths_output_from_upipe(upipe);
+
+    upipe_srths->srths_output = upipe;
+
+    upipe_srths_output_init_urefcount(upipe);
+    upipe_srths_output_init_output(upipe);
+    upipe_srths_output_init_sub(upipe);
+    upipe_srths_output_init_ubuf_mgr(upipe);
+    upipe_srths_output_init_uref_mgr(upipe);
+
+    upipe_throw_ready(upipe);
+
+    upipe_srths_output_require_uref_mgr(upipe);
+
+    return upipe;
+}
+
+
+/** @This frees a upipe.
+ *
+ * @param upipe description structure of the pipe
+ */
+static void upipe_srths_output_free(struct upipe *upipe)
+{
+    //struct upipe_srths_output *upipe_srths_output = upipe_srths_output_from_upipe(upipe);
+    upipe_throw_dead(upipe);
+
+    struct upipe_srths *upipe_srths = upipe_srths_from_sub_mgr(upipe->mgr);
+    upipe_srths->srths_output = NULL;
+    upipe_srths_output_clean_output(upipe);
+    upipe_srths_output_clean_sub(upipe);
+    upipe_srths_output_clean_urefcount(upipe);
+    upipe_srths_output_clean_ubuf_mgr(upipe);
+    upipe_srths_output_clean_uref_mgr(upipe);
+    upipe_srths_output_free_void(upipe);
+}
+
+/** @internal @This sets the input flow definition.
+ *
+ * @param upipe description structure of the pipe
+ * @param flow_def flow definition packet
+ * @return an error code
+ */
+static int upipe_srths_output_set_flow_def(struct upipe *upipe, struct uref *flow_def)
+{
+    struct upipe_srths *upipe_srths = upipe_srths_from_upipe(upipe);
+    if (flow_def == NULL)
+        return UBASE_ERR_INVALID;
+    UBASE_RETURN(uref_flow_match_def(flow_def, "block."))
+
+    if (upipe_srths->srths_output) {
+        struct uref *flow_def_dup = uref_dup(flow_def);
+        if (unlikely(flow_def_dup == NULL))
+            return UBASE_ERR_ALLOC;
+        upipe_srths_output_store_flow_def(upipe_srths->srths_output, flow_def_dup);
+    }
+
+    return UBASE_ERR_NONE;
+}
+
+/** @internal @This processes control commands on an output subpipe of a dup
+ * pipe.
+ *
+ * @param upipe description structure of the pipe
+ * @param command type of command to process
+ * @param args arguments of the command
+ * @return an error code
+ */
+static int _upipe_srths_output_control(struct upipe *upipe,
+                                    int command, va_list args)
+{
+    UBASE_HANDLED_RETURN(upipe_srths_output_control_super(upipe, command, args));
+    UBASE_HANDLED_RETURN(upipe_srths_output_control_output(upipe, command, args));
+    switch (command) {
+        case UPIPE_SET_FLOW_DEF: {
+            struct uref *flow_def = va_arg(args, struct uref *);
+            return upipe_srths_output_set_flow_def(upipe, flow_def);
+        }
+        default:
+            return UBASE_ERR_UNHANDLED;
+    }
+}
+static int upipe_srths_output_control(struct upipe *upipe, int command, va_list args)
+{
+    UBASE_RETURN(_upipe_srths_output_control(upipe, command, args))
+    return upipe_srths_output_check(upipe, NULL);
+}
+
+/** @internal @This handles RTCP data.
+ *
+ * @param upipe description structure of the pipe
+ * @param uref uref structure
+ * @param upump_p reference to pump that generated the buffer
+ */
+static void upipe_srths_output_input(struct upipe *upipe, struct uref *uref,
+                                    struct upump **upump_p)
+{
+    struct upipe_srths_output *upipe_srths_output = upipe_srths_output_from_upipe(upipe);
+    struct upipe_srths *upipe_srths = upipe_srths_from_sub_mgr(upipe->mgr);
+
+    if (upipe_srths_output->uref_mgr == NULL || upipe_srths_output->ubuf_mgr == NULL) {
+        upipe_srths_output_check(upipe, NULL);
+        uref_free(uref);
+        return;
+    }
+
+    upipe_srths_output_output(upipe, uref, upump_p);
+}
+
+/** @internal @This initializes the output manager for a srths set pipe.
+ *
+ * @param upipe description structure of the pipe
+ */
+static void upipe_srths_init_sub_mgr(struct upipe *upipe)
+{
+    struct upipe_srths *upipe_srths = upipe_srths_from_upipe(upipe);
+    struct upipe_mgr *sub_mgr = &upipe_srths->sub_mgr;
+    sub_mgr->refcount = upipe_srths_to_urefcount_real(upipe_srths);
+    sub_mgr->signature = UPIPE_SRT_HANDSHAKE_OUTPUT_SIGNATURE;
+    sub_mgr->upipe_alloc = upipe_srths_output_alloc;
+    sub_mgr->upipe_input = upipe_srths_output_input;
+    sub_mgr->upipe_control = upipe_srths_output_control;
+}
+
 
 /** @internal @This allocates a SRT handshake pipe.
  *
@@ -112,6 +354,10 @@ static struct upipe *upipe_srths_alloc(struct upipe_mgr *mgr,
     struct upipe_srths *upipe_srths = upipe_srths_from_upipe(upipe);
 
     upipe_srths_init_urefcount(upipe);
+    upipe_srths_init_urefcount_real(upipe);
+    upipe_srths_init_sub_outputs(upipe);
+    upipe_srths_init_sub_mgr(upipe);
+
     upipe_srths_init_uref_mgr(upipe);
     upipe_srths_init_ubuf_mgr(upipe);
     upipe_srths_init_output(upipe);
@@ -120,6 +366,7 @@ static struct upipe *upipe_srths_alloc(struct upipe_mgr *mgr,
     upipe_srths->socket_id = 0;
     upipe_srths->syn_cookie = 1;
     upipe_srths->expect_conclusion = false;
+    upipe_srths->srths_output = NULL;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -195,12 +442,10 @@ static int upipe_srths_set_flow_def(struct upipe *upipe, struct uref *flow_def)
 static int _upipe_srths_control(struct upipe *upipe,
                                  int command, va_list args)
 {
-    switch (command) {
-        case UPIPE_GET_FLOW_DEF:
-        case UPIPE_GET_OUTPUT:
-        case UPIPE_SET_OUTPUT:
-            return upipe_srths_control_output(upipe, command, args);
+    UBASE_HANDLED_RETURN(upipe_srths_control_output(upipe, command, args));
+    UBASE_HANDLED_RETURN(upipe_srths_control_outputs(upipe, command, args));
 
+    switch (command) {
         case UPIPE_SET_FLOW_DEF: {
             struct uref *flow = va_arg(args, struct uref *);
             return upipe_srths_set_flow_def(upipe, flow);
@@ -408,7 +653,9 @@ static void upipe_srths_input(struct upipe *upipe, struct uref *uref,
             } else if (type == SRT_CONTROL_TYPE_NAK) {
             }
         } else {
-            printf("data\n");
+            assert(upipe_srths->srths_output);
+            // TODO : remove header
+            upipe_input(upipe_srths->srths_output, uref_dup(uref), upump_p);
         }
 
 skip:
@@ -432,6 +679,8 @@ static void upipe_srths_free(struct upipe *upipe)
     upipe_srths_clean_ubuf_mgr(upipe);
     upipe_srths_clean_uref_mgr(upipe);
     upipe_srths_clean_urefcount(upipe);
+    upipe_srths_clean_urefcount_real(upipe);
+    upipe_srths_clean_sub_outputs(upipe);
     upipe_srths_free_void(upipe);
 }
 

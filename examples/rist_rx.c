@@ -200,6 +200,15 @@ int main(int argc, char *argv[])
     assert(upipe_srths);
     upipe_mgr_release(upipe_srths_mgr);
 
+    struct upipe *upipe_srt_sub = upipe_void_alloc_sub(upipe_srths,
+            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt_sub"));
+    assert(upipe_srt_sub);
+    upipe_udp_sink = upipe_void_alloc_output(upipe_srt_sub,
+            udp_sink_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel,
+                "data udpsink"));
+    upipe_set_uri(upipe_udp_sink, dirpath);
+    upipe_release(upipe_udp_sink);
+
     /* receive RTP */
     if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath))) {
         return EXIT_FAILURE;

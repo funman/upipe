@@ -37,6 +37,7 @@ extern "C" {
 #include "upipe/upipe.h"
 
 #define UPIPE_SRT_HANDSHAKE_SIGNATURE UBASE_FOURCC('s','r','t','h')
+#define UPIPE_SRT_HANDSHAKE_OUTPUT_SIGNATURE UBASE_FOURCC('s','r','t','o')
 
 /** @This returns the management structure for all srt handshakes sources.
  *
