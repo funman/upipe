@@ -654,8 +654,20 @@ static void upipe_srths_input(struct upipe *upipe, struct uref *uref,
             }
         } else {
             assert(upipe_srths->srths_output);
-            // TODO : remove header
-            upipe_input(upipe_srths->srths_output, uref_dup(uref), upump_p);
+            struct uref *data = uref_dup(uref);
+
+            uint32_t seq = srt_get_data_packet_seq(buf);
+            uint32_t position = srt_get_data_packet_position(buf);
+            bool order = srt_get_data_packet_order(buf);
+            uint8_t encryption = srt_get_data_packet_encryption(buf);
+            bool retransmit = srt_get_data_packet_retransmit(buf);
+            uint32_t num = srt_get_data_packet_message_number(buf);
+            uint32_t ts = srt_get_packet_timestamp(buf);
+            uint32_t socket_id = srt_get_packet_dst_socket_id(buf);
+
+            uref_block_resize(data, SRT_HEADER_SIZE, -1);
+
+            upipe_input(upipe_srths->srths_output, data, upump_p);
         }
 
 skip:
