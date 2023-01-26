@@ -194,13 +194,13 @@ int main(int argc, char *argv[])
     upipe_mgr_release(upipe_probe_uref_mgr);
     upipe_release(upipe_probe_uref);
 
-    struct upipe_mgr *upipe_srths_mgr = upipe_srths_mgr_alloc();
-    struct upipe *upipe_srths = upipe_void_alloc_output(upipe_udpsrc,
-            upipe_srths_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt"));
-    assert(upipe_srths);
-    upipe_mgr_release(upipe_srths_mgr);
+    struct upipe_mgr *upipe_srt_mgr = upipe_srt_mgr_alloc();
+    struct upipe *upipe_srt = upipe_void_alloc_output(upipe_udpsrc,
+            upipe_srt_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt"));
+    assert(upipe_srt);
+    upipe_mgr_release(upipe_srt_mgr);
 
-    struct upipe *upipe_srt_sub = upipe_void_alloc_sub(upipe_srths,
+    struct upipe *upipe_srt_sub = upipe_void_alloc_sub(upipe_srt,
             uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt_sub"));
     assert(upipe_srt_sub);
     upipe_udp_sink = upipe_void_alloc_output(upipe_srt_sub,
@@ -215,7 +215,7 @@ int main(int argc, char *argv[])
     }
 
     upipe_attach_uclock(upipe_udpsrc);
-    upipe_udp_sink = upipe_void_chain_output(upipe_srths,
+    upipe_udp_sink = upipe_void_chain_output(upipe_srt,
             udp_sink_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel,
                 "udpsink"));
 

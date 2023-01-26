@@ -43,7 +43,7 @@ extern "C" {
  *
  * @return pointer to manager
  */
-struct upipe_mgr *upipe_srths_mgr_alloc(void);
+struct upipe_mgr *upipe_srt_mgr_alloc(void);
 
 #ifdef __cplusplus
 }
