@@ -458,7 +458,7 @@ next:
             } else {
                 srt_set_packet_control(out, true);
                 srt_set_packet_timestamp(out, 0); // TODO
-                srt_set_packet_dst_socket_id(out, 0);
+                srt_set_packet_dst_socket_id(out, upipe_srt->socket_id);
                 srt_set_control_packet_type(out, SRT_CONTROL_TYPE_ACK);
                 srt_set_control_packet_subtype(out, 0);
                 srt_set_control_packet_type_specific(out, upipe_srt->ack_num++);
@@ -476,7 +476,6 @@ next:
 
                 uref_block_unmap(uref, 0);
                 upipe_srt_output(upipe, uref, NULL);
-                printf("send ack\n");
             }
         }
     }
