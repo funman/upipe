@@ -294,58 +294,6 @@ static void upipe_srt_output_free(struct upipe *upipe)
     upipe_srt_output_free_void(upipe);
 }
 
-/** @internal @This sends a retransmission request for a number of seqnums.
- *
- * @param upipe description structure of the pipe
- * @param lost_seqnum First sequence number missing
- * @param seqnum First sequence number NOT missing
- */
-static void upipe_srt_output_lost(struct upipe *upipe, uint32_t lost_seqnum, uint32_t seqnum)
-{
-    struct upipe_srt *upipe_srt = upipe_srt_from_upipe(upipe);
-    printf("%s()\n", __func__);
-
-    int s = SRT_HEADER_SIZE + 4;
-
-    /* Allocate NACK packet */
-    struct uref *pkt = uref_block_alloc(upipe_srt->uref_mgr,
-        upipe_srt->ubuf_mgr, s);
-    if (unlikely(!pkt)) {
-        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
-        return;
-    }
-
-    uint8_t *buf;
-    uref_block_write(pkt, 0, &s, &buf);
-    memset(buf, 0, s);
-
-    uint32_t pkts = seqnum - 1 - lost_seqnum;
-
-    srt_set_packet_control(buf, true);
-    srt_set_packet_timestamp(buf, 0); // TODO
-    srt_set_packet_dst_socket_id(buf, upipe_srt->socket_id);
-    srt_set_control_packet_type(buf, SRT_CONTROL_TYPE_NAK);
-    srt_set_control_packet_subtype(buf, 0);
-    uint8_t *cif = (uint8_t*)srt_get_control_packet_cif(buf);
-
-    cif[0] = (lost_seqnum >> 24) & 0x7f;
-    cif[1] = (lost_seqnum >> 16) & 0xff;
-    cif[2] = (lost_seqnum >>  8) & 0xff;
-    cif[3] = (lost_seqnum      ) & 0xff;
-
-    /* Header */
-    upipe_srt->nacks += pkts + 1;
-
-    upipe_verbose_va(upipe, "NACKing %hu", lost_seqnum);
-
-    uref_block_unmap(pkt, 0);
-
-    // XXX : date NACK packet?
-    //uref_clock_set_date_sys(pkt, /* cr */ 0, UREF_DATE_CR);
-
-    upipe_srt_output(upipe, pkt, NULL);
-}
-
 static uint64_t _upipe_srt_get_rtt(struct upipe *upipe)
 {
     struct upipe_srt *upipe_srt = upipe_srt_from_upipe(upipe);
@@ -368,6 +316,9 @@ static void upipe_srt_timer_lost(struct upump *upump)
     struct upipe *upipe = upump_get_opaque(upump, struct upipe *);
     struct upipe_srt *upipe_srt = upipe_srt_from_upipe(upipe);
 
+    if (upipe_srt->buffered == 0)
+        return;
+
     uint64_t expected_seq = UINT64_MAX;
 
     uint64_t rtt = _upipe_srt_get_rtt(upipe);
@@ -386,6 +337,11 @@ static void upipe_srt_timer_lost(struct upump *upump)
     int holes = 0;
 
     uint64_t last_received = UINT64_MAX;
+
+
+    int s = 1472; /* 1500 - IP - UDP */
+    struct uref *pkt = NULL;
+    uint8_t *cif = NULL;
 
     ulist_foreach(&upipe_srt->queue, uchain) {
         struct uref *uref = uref_from_uchain(uchain);
@@ -421,20 +377,62 @@ static void upipe_srt_timer_lost(struct upump *upump)
                 upipe_srt->last_nack[seq & 0xffff] = now;
             }
 
-            /* TODO:
-                - check the following packets to fill in bitmask
-                - send request in a single batch (multiple FCI)
-             */
-            upipe_srt_output_lost(upipe, expected_seq, seqnum);
+            if (!pkt) {
+                pkt = uref_block_alloc(upipe_srt->uref_mgr, upipe_srt->ubuf_mgr, s);
+                if (unlikely(!pkt)) {
+                    upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+                    return;
+                }
+
+                uint8_t *buf;
+                uref_block_write(pkt, 0, &s, &buf);
+                memset(buf, 0, s);
+
+                s -= SRT_HEADER_SIZE;
+
+                srt_set_packet_control(buf, true);
+                srt_set_packet_timestamp(buf, now / 27);
+                srt_set_packet_dst_socket_id(buf, upipe_srt->socket_id);
+                srt_set_control_packet_type(buf, SRT_CONTROL_TYPE_NAK);
+                srt_set_control_packet_subtype(buf, 0);
+                cif = (uint8_t*)srt_get_control_packet_cif(buf);
+            }
+
+            // TODO : if full, transmit and realloc next one
+            if (seqnum - expected_seq > 1) {
+                if (s < 8) {
+                    upipe_warn_va(upipe, "NAK FULL");
+                    break;
+                }
+                cif[0] = ((expected_seq >> 24) & 0x7f) | 0x80;
+                cif[1] = (expected_seq >> 16) & 0xff;
+                cif[2] = (expected_seq >>  8) & 0xff;
+                cif[3] = (expected_seq      ) & 0xff;
+                cif[4] = (seqnum >> 24) & 0x7f;
+                cif[5] = (seqnum >> 16) & 0xff;
+                cif[6] = (seqnum >>  8) & 0xff;
+                cif[7] = (seqnum      ) & 0xff;
+                s -= 8;
+                cif += 8;
+            } else {
+                cif[0] = (expected_seq >> 24) & 0x7f;
+                cif[1] = (expected_seq >> 16) & 0xff;
+                cif[2] = (expected_seq >>  8) & 0xff;
+                cif[3] = (expected_seq      ) & 0xff;
+                s -= 4;
+                cif += 4;
+                if (s < 4) {
+                    upipe_warn_va(upipe, "NAK FULL");
+                    break;
+                }
+            }
+
             holes++;
         }
 
 next:
         expected_seq = (seqnum + 1) & UINT32_MAX;
     }
-
-    if (upipe_srt->buffered == 0)
-        return;
 
     // A Full ACK control packet is sent every 10 ms and has all the fields of Figure 13.
     if (upipe_srt->last_ack == UINT64_MAX || (now - upipe_srt->last_ack > UCLOCK_FREQ / 100)) {
@@ -449,7 +447,7 @@ next:
                 upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
             } else {
                 srt_set_packet_control(out, true);
-                srt_set_packet_timestamp(out, 0); // TODO
+                srt_set_packet_timestamp(out, now / 27);
                 srt_set_packet_dst_socket_id(out, upipe_srt->socket_id);
                 srt_set_control_packet_type(out, SRT_CONTROL_TYPE_ACK);
                 srt_set_control_packet_subtype(out, 0);
@@ -476,12 +474,22 @@ next:
     }
 
     if (holes) { /* debug stats */
-        uint64_t now = uclock_now(upipe_srt->uclock);
         static uint64_t old;
         if (likely(old != 0))
             upipe_dbg_va(upipe, "%d holes after %"PRIu64" ms",
                     holes, 1000 * (now - old) / UCLOCK_FREQ);
         old = now;
+
+        upipe_srt->nacks += holes; // XXX
+
+        uref_block_unmap(pkt, 0);
+
+        // XXX : date NACK packet?
+        //uref_clock_set_date_sys(pkt, /* cr */ 0, UREF_DATE_CR);
+
+        uref_block_resize(pkt, 0, 1472 - s);
+
+        upipe_srt_output(upipe, pkt, NULL);
     }
 }
 
@@ -849,6 +857,8 @@ static struct uref *upipe_srt_input_control(struct upipe *upipe, const uint8_t *
     struct upipe_srt *upipe_srt = upipe_srt_from_upipe(upipe);
 
     uint16_t type = srt_get_control_packet_type(buf);
+    uint32_t timestamp = uclock_now(upipe_srt->uclock) / 27;
+
     upipe_verbose_va(upipe, "control pkt %s", get_ctrl_type(type));
     if (type == SRT_CONTROL_TYPE_HANDSHAKE) {
         const uint8_t *cif = srt_get_control_packet_cif(buf);
@@ -902,7 +912,7 @@ static struct uref *upipe_srt_input_control(struct upipe *upipe, const uint8_t *
             memset(out, 0, output_size);
 
             srt_set_packet_control(out, true);
-            srt_set_packet_timestamp(out, 0); // TODO
+            srt_set_packet_timestamp(out, timestamp);
             srt_set_packet_dst_socket_id(out, socket_id);
             srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
             srt_set_control_packet_subtype(out, 0);
@@ -912,7 +922,7 @@ static struct uref *upipe_srt_input_control(struct upipe *upipe, const uint8_t *
             memset(&addr, 0, sizeof(addr));
             struct sockaddr_in *in = (struct sockaddr_in*)&addr;
             in->sin_family = AF_INET;
-            in->sin_addr.s_addr = INADDR_LOOPBACK;
+            in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
             in->sin_port = htons(1234);
 
             srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
@@ -965,7 +975,7 @@ static struct uref *upipe_srt_input_control(struct upipe *upipe, const uint8_t *
             }
 
             srt_set_packet_control(out, true);
-            srt_set_packet_timestamp(out, 0);
+            srt_set_packet_timestamp(out, timestamp);
             srt_set_packet_dst_socket_id(out, upipe_srt->socket_id);
             srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
             srt_set_control_packet_subtype(out, 0);
@@ -1122,13 +1132,6 @@ static void upipe_srt_input(struct upipe *upipe, struct uref *uref,
     ubase_assert(uref_block_unmap(uref, 0));
 
     uref_block_resize(uref, SRT_HEADER_SIZE, -1); /* skip SRT header */
-
-    static unsigned x; // fake loss
-    if ((x++ & 0xfff) == 0) {
-        // drop
-        uref_free(uref);
-        return;
-    }
 
 //    upipe_dbg_va(upipe, "Data seq %u", seqnum);
 
