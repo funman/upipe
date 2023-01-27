@@ -442,6 +442,9 @@ next:
         expected_seq = (seqnum + 1) & UINT32_MAX;
     }
 
+    if (upipe_srt->buffered == 0)
+        return;
+
     // A Full ACK control packet is sent every 10 ms and has all the fields of Figure 13.
     if (upipe_srt->last_ack == UINT64_MAX || (now - upipe_srt->last_ack > UCLOCK_FREQ / 100)) {
         struct uref *uref = uref_block_alloc(upipe_srt->uref_mgr,
@@ -876,6 +879,7 @@ static struct uref *upipe_srt_input_control(struct upipe *upipe, const uint8_t *
             }
 
             uint32_t socket_id = srt_get_handshake_socket_id(cif);
+            upipe_srt->socket_id = socket_id;
             struct sockaddr_storage addr;
             srt_get_handshake_ip(cif, (struct sockaddr *)&addr);
             char ip_str[INET6_ADDRSTRLEN];
@@ -901,30 +905,43 @@ static struct uref *upipe_srt_input_control(struct upipe *upipe, const uint8_t *
                 upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
             }
 
+            memset(out, 0, output_size);
+
             srt_set_packet_control(out, true);
             srt_set_packet_timestamp(out, 0); // TODO
-            srt_set_packet_dst_socket_id(out, 0);
+            srt_set_packet_dst_socket_id(out, socket_id);
             srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
             srt_set_control_packet_subtype(out, 0);
             srt_set_control_packet_type_specific(out, 0);
             uint8_t *out_cif = (uint8_t*)srt_get_control_packet_cif(out);
 
+            memset(&addr, 0, sizeof(addr));
+            struct sockaddr_in *in = (struct sockaddr_in*)&addr;
+            in->sin_family = AF_INET;
+            in->sin_addr.s_addr = INADDR_LOOPBACK;
+            in->sin_port = htons(1234);
+
+            srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
+
+            srt_set_handshake_mtu(out_cif, 1500);
+            srt_set_handshake_mfw(out_cif, 8192);
             srt_set_handshake_version(out_cif, SRT_HANDSHAKE_VERSION);
             srt_set_handshake_encryption(out_cif, SRT_HANDSHAKE_CIPHER_NONE);
             srt_set_handshake_extension(out_cif, SRT_MAGIC_CODE);
             srt_set_handshake_type(out_cif, SRT_HANDSHAKE_TYPE_INDUCTION);
             srt_set_handshake_syn_cookie(out_cif, upipe_srt->syn_cookie);
-            srt_set_handshake_socket_id(out_cif, upipe_srt->socket_id);
+            srt_set_handshake_socket_id(out_cif, socket_id);
 
             upipe_srt->expect_conclusion = true;
 
             uref_block_unmap(uref, 0);
             return uref;
         } else {
+            uint32_t socket_id = srt_get_handshake_socket_id(cif);
             if (version != 5 || encryption != SRT_HANDSHAKE_CIPHER_NONE
                     || hs_type != SRT_HANDSHAKE_TYPE_CONCLUSION
                     || syn_cookie != upipe_srt->syn_cookie
-                    || dst_socket_id != upipe_srt->socket_id) {
+                    || socket_id != upipe_srt->socket_id) {
                 upipe_err(upipe, "Malformed conclusion handshake");
                 upipe_srt->expect_conclusion = false;
                 return NULL;
@@ -955,7 +972,7 @@ static struct uref *upipe_srt_input_control(struct upipe *upipe, const uint8_t *
 
             srt_set_packet_control(out, true);
             srt_set_packet_timestamp(out, 0);
-            srt_set_packet_dst_socket_id(out, 0);
+            srt_set_packet_dst_socket_id(out, upipe_srt->socket_id);
             srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
             srt_set_control_packet_subtype(out, 0);
             srt_set_control_packet_type_specific(out, 0);
@@ -968,10 +985,13 @@ static struct uref *upipe_srt_input_control(struct upipe *upipe, const uint8_t *
             srt_set_handshake_syn_cookie(out_cif, 0);
             srt_set_handshake_socket_id(out_cif, upipe_srt->socket_id);
             srt_set_handshake_isn(out_cif, srt_get_handshake_isn(cif));
-            srt_set_handshake_mtu(out_cif, srt_get_handshake_mtu(cif));
-            srt_set_handshake_mfw(out_cif, srt_get_handshake_mfw(cif));
+            srt_set_handshake_mtu(out_cif, 1500);
+            srt_set_handshake_mfw(out_cif, 8192);
 
-            // TODO: peer
+            memset(&addr, 0, sizeof(addr));
+            printf("IP %s\n", ip_str);
+            srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
+
             srt_set_handshake_extension_type(out_cif, srt_get_handshake_extension_type(cif));
             uint16_t ext_len = srt_get_handshake_extension_len(cif);
             srt_set_handshake_extension_len(out_cif, ext_len);
