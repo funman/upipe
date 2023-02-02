@@ -1026,7 +1026,7 @@ static bool upipe_srt_insert_inner(struct upipe *upipe, struct uref *uref,
     uint64_t next_seqnum = 0;
     uref_attr_get_priv(next, &next_seqnum);
 
-    uint16_t diff = seqnum - next_seqnum;
+    uint32_t diff = seqnum - next_seqnum;
     if (!diff) {
         upipe_verbose_va(upipe, "dropping duplicate %hu", seqnum);
         upipe_srt->dups++;
@@ -1035,7 +1035,7 @@ static bool upipe_srt_insert_inner(struct upipe *upipe, struct uref *uref,
     }
 
     /* browse the list until we find a seqnum bigger than ours */
-    if (diff < 0x8000) // seqnum > next_seqnum
+    if (diff < 0x8000000) // seqnum > next_seqnum
         return false;
 
     /* if there's no previous packet we're too late */
