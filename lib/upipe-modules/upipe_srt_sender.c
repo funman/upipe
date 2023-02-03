@@ -176,7 +176,7 @@ static void upipe_srt_sender_input_sub(struct upipe *upipe, struct uref *uref,
     }
 
     uint16_t type = srt_get_control_packet_type(buf);
-    upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
+    //upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
 
     if (type == SRT_CONTROL_TYPE_NAK) {
         buf += SRT_HEADER_SIZE;
