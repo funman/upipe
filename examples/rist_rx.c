@@ -49,7 +49,6 @@
 #include "upipe/upipe.h"
 #include "upipe-modules/upipe_udp_source.h"
 #include "upipe-modules/upipe_udp_sink.h"
-#include "upipe-filters/upipe_rtp_feedback.h"
 #include "upipe-modules/upipe_srt_handshake.h"
 #include "upipe-modules/upipe_srt_receiver.h"
 
@@ -178,13 +177,15 @@ int main(int argc, char *argv[])
     logger = uprobe_uclock_alloc(logger, uclock);
     assert(logger != NULL);
 
-    /* rtp source */
+    bool listener = srcpath && *srcpath == '@';
+
+    /* srt source */
+    struct uprobe *p = uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp source");
     struct uprobe uprobe_udp;
-    uprobe_init(&uprobe_udp, catch_udp, uprobe_pfx_alloc(uprobe_use(logger),
-                loglevel, "udp source"));
+    uprobe_init(&uprobe_udp, catch_udp, p);
 
     struct upipe_mgr *upipe_udpsrc_mgr = upipe_udpsrc_mgr_alloc();
-    upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr, &uprobe_udp);
+    upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr, listener ? &uprobe_udp : p);
     upipe_mgr_release(upipe_udpsrc_mgr);
 
     struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc();
@@ -212,9 +213,17 @@ int main(int argc, char *argv[])
     assert(upipe_srtr_sub);
     upipe_set_output(upipe_srtr_sub, upipe_udp_sink);
 
-    /* receive RTP */
-    if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath))) {
-        return EXIT_FAILURE;
+    /* receive SRT */
+    if (listener) {
+        if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath)))
+            return EXIT_FAILURE;
+    } else {
+        if (!ubase_check(upipe_set_uri(upipe_udp_sink, srcpath)))
+            return EXIT_FAILURE;
+
+        int udp_fd;
+        ubase_assert(upipe_udpsink_get_fd(upipe_udp_sink, &udp_fd));
+        ubase_assert(upipe_udpsrc_set_fd(upipe_udpsrc, dup(udp_fd)));
     }
 
     upipe_attach_uclock(upipe_udpsrc);
