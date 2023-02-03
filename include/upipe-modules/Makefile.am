@@ -93,4 +93,5 @@ myinclude_HEADERS = \
 	upipe_graph.h \
 	upipe_srt_handshake.h \
 	upipe_srt_sender.h \
+	upipe_srt_receiver.h \
 	$(NULL)

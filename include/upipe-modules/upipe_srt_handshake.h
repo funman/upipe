@@ -37,13 +37,13 @@ extern "C" {
 #include "upipe/upipe.h"
 
 #define UPIPE_SRT_HANDSHAKE_SIGNATURE UBASE_FOURCC('s','r','t','h')
-#define UPIPE_SRT_HANDSHAKE_OUTPUT_SIGNATURE UBASE_FOURCC('s','r','t','o')
+#define UPIPE_SRT_HANDSHAKE_OUTPUT_SIGNATURE UBASE_FOURCC('s','r','h','o')
 
 /** @This returns the management structure for all srt handshakes sources.
  *
  * @return pointer to manager
  */
-struct upipe_mgr *upipe_srt_mgr_alloc(void);
+struct upipe_mgr *upipe_srt_handshake_mgr_alloc(void);
 
 #ifdef __cplusplus
 }

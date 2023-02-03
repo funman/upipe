@@ -49,9 +49,9 @@
 #include "upipe/upipe.h"
 #include "upipe-modules/upipe_udp_source.h"
 #include "upipe-modules/upipe_udp_sink.h"
-#include "upipe-modules/upipe_probe_uref.h"
 #include "upipe-filters/upipe_rtp_feedback.h"
 #include "upipe-modules/upipe_srt_handshake.h"
+#include "upipe-modules/upipe_srt_receiver.h"
 
 #include <arpa/inet.h>
 
@@ -187,27 +187,30 @@ int main(int argc, char *argv[])
     upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr, &uprobe_udp);
     upipe_mgr_release(upipe_udpsrc_mgr);
 
-    struct upipe_mgr *upipe_probe_uref_mgr = upipe_probe_uref_mgr_alloc();
-    struct upipe *upipe_probe_uref = upipe_void_alloc_output(upipe_udpsrc,
-            upipe_probe_uref_mgr, uprobe_use(logger));
-    assert(upipe_probe_uref);
-    upipe_mgr_release(upipe_probe_uref_mgr);
-    upipe_release(upipe_probe_uref);
+    struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc();
+    struct upipe *upipe_srth = upipe_void_alloc_output(upipe_udpsrc,
+            upipe_srt_handshake_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srth"));
+    assert(upipe_srth);
+    upipe_mgr_release(upipe_srt_handshake_mgr);
 
-    struct upipe_mgr *upipe_srt_mgr = upipe_srt_mgr_alloc();
-    struct upipe *upipe_srt = upipe_void_alloc_output(upipe_udpsrc,
-            upipe_srt_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt"));
-    assert(upipe_srt);
-    upipe_mgr_release(upipe_srt_mgr);
-
-    struct upipe *upipe_srt_sub = upipe_void_alloc_sub(upipe_srt,
-            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt_sub"));
-    assert(upipe_srt_sub);
-    upipe_udp_sink = upipe_void_alloc_output(upipe_srt_sub,
+    struct upipe *upipe_srth_sub = upipe_void_alloc_sub(upipe_srth,
+            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srth_sub"));
+    assert(upipe_srth_sub);
+    upipe_udp_sink = upipe_void_alloc_output(upipe_srth_sub,
             udp_sink_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel,
-                "data udpsink"));
-    upipe_set_uri(upipe_udp_sink, dirpath);
+                "udpsink"));
     upipe_release(upipe_udp_sink);
+
+    struct upipe_mgr *upipe_srt_receiver_mgr = upipe_srt_receiver_mgr_alloc();
+    struct upipe *upipe_srtr = upipe_void_chain_output(upipe_srth,
+            upipe_srt_receiver_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srtr"));
+    assert(upipe_srtr);
+    upipe_mgr_release(upipe_srt_receiver_mgr);
+
+    struct upipe *upipe_srtr_sub = upipe_void_alloc_sub(upipe_srtr,
+            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srtr_sub"));
+    assert(upipe_srtr_sub);
+    upipe_set_output(upipe_srtr_sub, upipe_udp_sink);
 
     /* receive RTP */
     if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath))) {
@@ -215,11 +218,11 @@ int main(int argc, char *argv[])
     }
 
     upipe_attach_uclock(upipe_udpsrc);
-    upipe_udp_sink = upipe_void_chain_output(upipe_srt,
+    struct upipe *upipe_udp_sink_data = upipe_void_chain_output(upipe_srtr,
             udp_sink_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel,
-                "udpsink"));
-
-    upipe_release(upipe_udp_sink);
+                "udpsink data"));
+    upipe_set_uri(upipe_udp_sink_data, dirpath);
+    upipe_release(upipe_udp_sink_data);
 
     if (0) {
         struct upump *u = upump_alloc_timer(upump_mgr, stop, NULL, NULL,

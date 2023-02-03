@@ -24,26 +24,26 @@
  */
 
 /** @file
- * @short Upipe module sending SRT
+ * @short Upipe module for SRT handshakes
  */
 
-#ifndef _UPIPE_FILTERS_UPIPE_SRT_SENDER_H_
+#ifndef _UPIPE_MODULES_UPIPE_SRT_RECEIVER_H_
 /** @hidden */
-#define _UPIPE_FILTERS_UPIPE_SRT_SENDER_H_
+#define _UPIPE_MODULES_UPIPE_SRT_RECEIVER_H_
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #include "upipe/upipe.h"
 
-#define UPIPE_SRT_SENDER_SIGNATURE UBASE_FOURCC('s','r','t','s')
-#define UPIPE_SRT_SENDER_INPUT_SIGNATURE UBASE_FOURCC('s','r','s','i')
+#define UPIPE_SRT_RECEIVER_SIGNATURE UBASE_FOURCC('s','r','t','r')
+#define UPIPE_SRT_RECEIVER_OUTPUT_SIGNATURE UBASE_FOURCC('s','r','r','o')
 
-/** @This returns the management structure for srt_sender pipes.
+/** @This returns the management structure for all srt receiver sources.
  *
  * @return pointer to manager
  */
-struct upipe_mgr *upipe_srt_sender_mgr_alloc(void);
+struct upipe_mgr *upipe_srt_receiver_mgr_alloc(void);
 
 #ifdef __cplusplus
 }
