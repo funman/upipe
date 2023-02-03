@@ -53,8 +53,9 @@
 #include "upipe/upipe.h"
 #include "upipe-modules/upipe_udp_source.h"
 #include "upipe-modules/upipe_udp_sink.h"
-#include "upipe-modules/upipe_probe_uref.h"
+
 #include "upipe-modules/upipe_srt_sender.h"
+#include "upipe-modules/upipe_srt_handshake.h"
 
 #include <fcntl.h>
 
@@ -72,7 +73,8 @@ static void usage(const char *argv0) {
 }
 
 static struct upipe *upipe_udpsink;
-static struct upipe *upipe_udpsrc_sub;
+static struct upipe *upipe_udpsrc_srt;
+static struct upipe *upipe_srt_handshake_sub;
 
 static struct uref_mgr *uref_mgr;
 
@@ -84,7 +86,7 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
 
     switch (event) {
     case UPROBE_SOURCE_END:
-        upipe_warn(upipe, "Remote end not listening, can't receive RTCP");
+        upipe_warn(upipe, "Remote end not listening, can't receive SRT");
         /* This control can not fail, and will trigger restart of upump */
         upipe_get_uri(upipe, &uri);
         return UBASE_ERR_NONE;
@@ -116,8 +118,9 @@ static void stop(struct upump *upump)
     upump_stop(upump);
     upump_free(upump);
 
-    upipe_release(upipe_udpsrc_sub);
+    upipe_release(upipe_udpsrc_srt);
     upipe_release(udpsrc);
+    upipe_release(upipe_srt_handshake_sub);
 }
 
 int main(int argc, char *argv[])
@@ -178,7 +181,7 @@ int main(int argc, char *argv[])
     /* rtp source */
     struct upipe_mgr *upipe_udpsrc_mgr = upipe_udpsrc_mgr_alloc();
     struct upipe *upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr,
-            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp source"));
+            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp source data"));
 
     if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath))) {
         return EXIT_FAILURE;
@@ -196,19 +199,22 @@ int main(int argc, char *argv[])
 
     struct uprobe uprobe_udp_srt;
     uprobe_init(&uprobe_udp_srt, catch_udp, uprobe_use(logger));
-    upipe_udpsrc_sub = upipe_void_alloc(upipe_udpsrc_mgr,
+    upipe_udpsrc_srt = upipe_void_alloc(upipe_udpsrc_mgr,
             uprobe_pfx_alloc(&uprobe_udp_srt, loglevel, "udp source srt"));
-    upipe_attach_uclock(upipe_udpsrc_sub);
+    upipe_attach_uclock(upipe_udpsrc_srt);
+
+    struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc();
+    struct upipe *upipe_srt_handshake = upipe_void_alloc_output(upipe_udpsrc_srt, upipe_srt_handshake_mgr,
+            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt handshake"));
+    upipe_mgr_release(upipe_srt_handshake_mgr);
 
     upipe_mgr_release(upipe_udpsrc_mgr);
 
-    struct upipe_mgr *upipe_probe_uref_mgr = upipe_probe_uref_mgr_alloc();
-    struct upipe *upipe_probe_uref = upipe_void_alloc_output(upipe_udpsrc_sub,
-            upipe_probe_uref_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "probe"));
-    assert(upipe_probe_uref);
-    upipe_mgr_release(upipe_probe_uref_mgr);
+    upipe_srt_handshake_sub = upipe_void_alloc_sub(upipe_srt_handshake,
+        uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt handshake sub"));
+    assert(upipe_srt_handshake_sub);
 
-    struct upipe *upipe_srt_sender_sub = upipe_void_chain_output_sub(upipe_probe_uref,
+    struct upipe *upipe_srt_sender_sub = upipe_void_chain_output_sub(upipe_srt_handshake,
         upipe_srt_sender,
         uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt sender sub"));
     assert(upipe_srt_sender_sub);
@@ -216,7 +222,7 @@ int main(int argc, char *argv[])
 
     /* send to udp */
     struct upipe_mgr *upipe_udpsink_mgr = upipe_udpsink_mgr_alloc();
-    upipe_udpsink = upipe_void_alloc_output(upipe_srt_sender, upipe_udpsink_mgr,
+    upipe_udpsink = upipe_void_chain_output(upipe_srt_sender, upipe_udpsink_mgr,
             uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp sink"));
     upipe_release(upipe_udpsink);
 
@@ -224,16 +230,18 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    upipe_set_output(upipe_srt_handshake_sub, upipe_udpsink);
+
     int udp_fd = -1;
     ubase_assert(upipe_udpsink_get_fd(upipe_udpsink, &udp_fd));
     int flags = fcntl(udp_fd, F_GETFL);
     flags |= O_NONBLOCK;
     if (fcntl(udp_fd, F_SETFL, flags) < 0)
         upipe_err(upipe_udpsink, "Could not set flags");;
-    ubase_assert(upipe_udpsrc_set_fd(upipe_udpsrc_sub, udp_fd));
+    ubase_assert(upipe_udpsrc_set_fd(upipe_udpsrc_srt, udp_fd));
 
     if (0) {
-        //upipe_dump_open(NULL, NULL, "dump.dot", NULL, upipe_udpsink, upipe_udpsrc, NULL);
+        upipe_dump_open(NULL, NULL, "dump.dot", NULL, upipe_udpsink, upipe_udpsrc, upipe_udpsrc_srt, NULL);
         struct upump *u = upump_alloc_timer(upump_mgr, stop, upipe_udpsrc,
                 NULL, UCLOCK_FREQ, 0);
         upump_start(u);
