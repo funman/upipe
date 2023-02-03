@@ -518,7 +518,7 @@ static void upipe_srt_timer(struct upump *upump)
             break;
 
         upipe_verbose_va(upipe, "Output seq %"PRIu64" after %"PRIu64" clocks", seqnum, now - cr_sys);
-        if (likely(upipe_srt->last_output_seqnum != UINT_MAX)) {
+        if (likely(upipe_srt->last_output_seqnum != UINT64_MAX)) {
             uint32_t diff = seqnum - upipe_srt->last_output_seqnum - 1;
             if (diff) {
                 upipe_srt->loss += diff;
