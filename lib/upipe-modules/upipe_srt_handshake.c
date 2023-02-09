@@ -100,9 +100,8 @@ struct upipe_srt_handshake {
     uint32_t remote_socket_id; /* theirs */
 
     bool expect_conclusion;
-    bool connected;
 
-    bool listener; // TODO : caller mode, use timer?
+    bool listener;
     uint64_t last_hs_sent;
 
     struct upipe *control;
@@ -433,11 +432,9 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     upipe_srt_handshake_init_uclock(upipe);
     upipe_srt_handshake_require_uclock(upipe);
 
-    // FIXME
-    upipe_srt_handshake->socket_id = 77;
+    upipe_srt_handshake->socket_id = 77; // TODO: random?
     upipe_srt_handshake->syn_cookie = 1;
     upipe_srt_handshake->listener = true;
-    upipe_srt_handshake->connected = false;
     upipe_srt_handshake->last_hs_sent = 0;
     
     upipe_srt_handshake->expect_conclusion = false;
@@ -521,6 +518,24 @@ static int upipe_srt_handshake_set_flow_def(struct upipe *upipe, struct uref *fl
     return UBASE_ERR_NONE;
 }
 
+static int upipe_srt_handshake_set_option(struct upipe *upipe, const char *option,
+        const char *value)
+{
+    struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
+
+    if (!option || !value)
+        return UBASE_ERR_INVALID;
+
+    if (!strcmp(option, "listener")) {
+        upipe_srt_handshake->listener = strcmp(value, "0");
+        printf("|LISTEN %d\n",upipe_srt_handshake->listener );
+        return UBASE_ERR_NONE;
+    }
+
+    upipe_err_va(upipe, "Unknown option %s", option);
+    return UBASE_ERR_INVALID;
+}
+
 /** @internal @This processes control commands on a SRT handshake pipe.
  *
  * @param upipe description structure of the pipe
@@ -542,6 +557,12 @@ static int _upipe_srt_handshake_control(struct upipe *upipe,
         case UPIPE_SET_FLOW_DEF: {
             struct uref *flow = va_arg(args, struct uref *);
             return upipe_srt_handshake_set_flow_def(upipe, flow);
+        }
+
+        case UPIPE_SET_OPTION: {
+            const char *option = va_arg(args, const char *);
+            const char *value  = va_arg(args, const char *);
+            return upipe_srt_handshake_set_option(upipe, option, value);
         }
 
         default:
@@ -609,7 +630,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
         uint32_t dst_socket_id = srt_get_packet_dst_socket_id(buf);
         srt_get_handshake_ip(cif, (struct sockaddr *)&addr);
 
-        if (upipe_srt_handshake->listener) {
+        if (!upipe_srt_handshake->listener) {
         if (!upipe_srt_handshake->expect_conclusion) {
             if (version != 5 || dst_socket_id != upipe_srt_handshake->socket_id
                     || encryption != SRT_HANDSHAKE_CIPHER_NONE

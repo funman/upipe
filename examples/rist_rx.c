@@ -192,6 +192,7 @@ int main(int argc, char *argv[])
     struct upipe *upipe_srth = upipe_void_alloc_output(upipe_udpsrc,
             upipe_srt_handshake_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srth"));
     assert(upipe_srth);
+    upipe_set_option(upipe_srth, "listener", listener ? "1" : "0");
     upipe_mgr_release(upipe_srt_handshake_mgr);
 
     struct upipe *upipe_srth_sub = upipe_void_alloc_sub(upipe_srth,
