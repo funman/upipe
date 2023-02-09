@@ -477,7 +477,7 @@ static int upipe_srt_handshake_check(struct upipe *upipe, struct uref *flow_form
         return UBASE_ERR_NONE;
     }
 
-    if (upipe_srt_handshake->upump_mgr && !upipe_srt_handshake->upump_timer) {
+    if (upipe_srt_handshake->upump_mgr && !upipe_srt_handshake->upump_timer && !upipe_srt_handshake->listener) {
         struct upump *upump =
             upump_alloc_timer(upipe_srt_handshake->upump_mgr,
                               upipe_srt_handshake_timer,
