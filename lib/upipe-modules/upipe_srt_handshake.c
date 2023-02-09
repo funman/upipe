@@ -333,7 +333,6 @@ static void upipe_srt_handshake_timer(struct upump *upump)
     upipe_srt_handshake_output_output(upipe_srt_handshake->control, uref,
             &upipe_srt_handshake->upump_timer);
     upipe_srt_handshake->last_hs_sent = now;
-    upipe_srt_handshake->expect_conclusion = false;
 }
 
 /** @internal @This sets the input flow definition.
@@ -528,7 +527,6 @@ static int upipe_srt_handshake_set_option(struct upipe *upipe, const char *optio
 
     if (!strcmp(option, "listener")) {
         upipe_srt_handshake->listener = strcmp(value, "0");
-        printf("|LISTEN %d\n",upipe_srt_handshake->listener );
         return UBASE_ERR_NONE;
     }
 
@@ -614,7 +612,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
     uint32_t timestamp = uclock_now(upipe_srt_handshake->uclock) / 27;
     struct sockaddr_storage addr;
 
-    //upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
+    upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
 
     if (type == SRT_CONTROL_TYPE_HANDSHAKE) {
         const uint8_t *cif = srt_get_control_packet_cif(buf);
@@ -729,12 +727,12 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
                     || extension != SRT_HANDSHAKE_EXT_KMREQ 
                     || hs_type != SRT_HANDSHAKE_TYPE_INDUCTION ||
                     syn_cookie != 0 || dst_socket_id != 0) {
-                upipe_err(upipe, "Malformed handshake");
+                upipe_err_va(upipe, "Malformed first handshake syn %u dst_id %u", syn_cookie, dst_socket_id);
                 return NULL;
             }
 
             uint32_t socket_id = srt_get_handshake_socket_id(cif);
-            upipe_srt_handshake->socket_id = socket_id; // TODO : flow def, transmit socket id to srtr
+            upipe_srt_handshake->remote_socket_id = socket_id; // TODO : flow def, transmit socket id to srtr
             char ip_str[INET6_ADDRSTRLEN];
             if (addr.ss_family == AF_INET) {
                 inet_ntop(AF_INET, &(((struct sockaddr_in *)&addr)->sin_addr),
@@ -795,7 +793,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             if (version != 5 || encryption != SRT_HANDSHAKE_CIPHER_NONE
                     || hs_type != SRT_HANDSHAKE_TYPE_CONCLUSION
                     || syn_cookie != upipe_srt_handshake->syn_cookie
-                    || socket_id != upipe_srt_handshake->socket_id) {
+                    || dst_socket_id != 0) {
                 upipe_err(upipe, "Malformed conclusion handshake");
                 upipe_srt_handshake->expect_conclusion = false;
                 return NULL;
@@ -824,7 +822,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
 
             srt_set_packet_control(out, true);
             srt_set_packet_timestamp(out, timestamp);
-            srt_set_packet_dst_socket_id(out, upipe_srt_handshake->socket_id);
+            srt_set_packet_dst_socket_id(out, upipe_srt_handshake->remote_socket_id);
             srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
             srt_set_control_packet_subtype(out, 0);
             srt_set_control_packet_type_specific(out, 0);
@@ -841,7 +839,11 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             srt_set_handshake_mfw(out_cif, 8192);
 
             memset(&addr, 0, sizeof(addr));
+            struct sockaddr_in *in = (struct sockaddr_in*)&addr;
+            in->sin_family = AF_INET;
             printf("IP %s\n", ip_str);
+            in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
+            in->sin_port = htons(1234);
             srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
 
             srt_set_handshake_extension_type(out_cif, srt_get_handshake_extension_type(cif));
@@ -854,6 +856,15 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
                     4 * ext_len);
 
             upipe_srt_handshake->expect_conclusion = false;
+
+            struct uref *flow_def;
+            if (ubase_check(upipe_srt_handshake_get_flow_def(upipe, &flow_def))) {
+                flow_def = uref_dup(flow_def);
+                if (flow_def) {
+                    uref_flow_set_id(flow_def, upipe_srt_handshake->remote_socket_id);
+                    upipe_srt_handshake_store_flow_def(upipe, flow_def);
+                }
+            }
 
             uref_block_unmap(uref, 0);
             return uref;
