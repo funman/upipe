@@ -675,7 +675,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
 
             srt_set_handshake_extension_srt_version(out_ext, 2, 2, 2);
             uint32_t flags = SRT_HANDSHAKE_EXT_FLAG_CRYPT | SRT_HANDSHAKE_EXT_FLAG_PERIODICNAK
-                | SRT_HANDSHAKE_EXT_FLAG_REXMITFLG | SRT_HANDSHAKE_EXT_FLAG_TSBPDSND | SRT_HANDSHAKE_EXT_FLAG_TSBPDRCV;
+                | SRT_HANDSHAKE_EXT_FLAG_REXMITFLG | SRT_HANDSHAKE_EXT_FLAG_TSBPDSND | SRT_HANDSHAKE_EXT_FLAG_TSBPDRCV | SRT_HANDSHAKE_EXT_FLAG_TLPKTDROP;
             srt_set_handshake_extension_srt_flags(out_ext, flags);
             srt_set_handshake_extension_receiver_tsbpd_delay(out_ext, 0);
             srt_set_handshake_extension_sender_tsbpd_delay(out_ext, 0);
