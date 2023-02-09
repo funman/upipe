@@ -749,6 +749,8 @@ static int upipe_srt_receiver_check(struct upipe *upipe, struct uref *flow_forma
  */
 static int upipe_srt_receiver_set_flow_def(struct upipe *upipe, struct uref *flow_def)
 {
+    struct upipe_srt_receiver *upipe_srt_receiver = upipe_srt_receiver_from_upipe(upipe);
+
     if (flow_def == NULL)
         return UBASE_ERR_INVALID;
 
@@ -759,6 +761,10 @@ static int upipe_srt_receiver_set_flow_def(struct upipe *upipe, struct uref *flo
         upipe_err_va(upipe, "Unknown def %s", def);
         return UBASE_ERR_INVALID;
     }
+
+    uint64_t id;
+    if (ubase_check(uref_flow_get_id(flow_def, &id)))
+        upipe_srt_receiver->socket_id = id;
 
     flow_def = uref_dup(flow_def);
     if (!flow_def)
@@ -927,7 +933,6 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
     (void)num;
     (void)retransmit; // stats?
     (void)ts; // TODO (µs)
-    upipe_srt_receiver->socket_id = socket_id;
 
     /* store seqnum in uref */
     uref_attr_set_priv(uref, seqnum);

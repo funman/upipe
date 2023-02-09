@@ -96,7 +96,8 @@ struct upipe_srt_handshake {
     struct uchain request_list;
 
     uint32_t syn_cookie;
-    uint32_t socket_id;
+    uint32_t socket_id; /* ours */
+    uint32_t remote_socket_id; /* theirs */
 
     bool expect_conclusion;
     bool connected;
@@ -334,7 +335,6 @@ static void upipe_srt_handshake_timer(struct upump *upump)
             &upipe_srt_handshake->upump_timer);
     upipe_srt_handshake->last_hs_sent = now;
     upipe_srt_handshake->expect_conclusion = false;
-    printf("NOW %" PRIu64 "\n", now);
 }
 
 /** @internal @This sets the input flow definition.
@@ -593,7 +593,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
     uint32_t timestamp = uclock_now(upipe_srt_handshake->uclock) / 27;
     struct sockaddr_storage addr;
 
-    upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
+    //upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
 
     if (type == SRT_CONTROL_TYPE_HANDSHAKE) {
         const uint8_t *cif = srt_get_control_packet_cif(buf);
@@ -677,8 +677,8 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             uint32_t flags = SRT_HANDSHAKE_EXT_FLAG_CRYPT | SRT_HANDSHAKE_EXT_FLAG_PERIODICNAK
                 | SRT_HANDSHAKE_EXT_FLAG_REXMITFLG | SRT_HANDSHAKE_EXT_FLAG_TSBPDSND | SRT_HANDSHAKE_EXT_FLAG_TSBPDRCV | SRT_HANDSHAKE_EXT_FLAG_TLPKTDROP;
             srt_set_handshake_extension_srt_flags(out_ext, flags);
-            srt_set_handshake_extension_receiver_tsbpd_delay(out_ext, 0);
-            srt_set_handshake_extension_sender_tsbpd_delay(out_ext, 0);
+            srt_set_handshake_extension_receiver_tsbpd_delay(out_ext, 120);
+            srt_set_handshake_extension_sender_tsbpd_delay(out_ext, 120);
 
             upipe_srt_handshake->expect_conclusion = true;
 
@@ -689,6 +689,18 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             *handled = true;
             upipe_srt_handshake_set_upump_timer(upipe, NULL);
             // check 
+            upipe_srt_handshake->remote_socket_id = srt_get_handshake_socket_id(cif);
+
+            {
+                struct uref *flow_def;
+                if (ubase_check(upipe_srt_handshake_get_flow_def(upipe, &flow_def))) {
+                    flow_def = uref_dup(flow_def);
+                    if (flow_def) {
+                        uref_flow_set_id(flow_def, upipe_srt_handshake->remote_socket_id);
+                        upipe_srt_handshake_store_flow_def(upipe, flow_def);
+                    }
+                }
+            }
         }
         } else {
         if (!upipe_srt_handshake->expect_conclusion) {
