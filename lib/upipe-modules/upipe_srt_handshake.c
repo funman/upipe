@@ -313,7 +313,7 @@ static void upipe_srt_handshake_timer(struct upump *upump)
     struct sockaddr_in *in = (struct sockaddr_in*)&addr;
     in->sin_family = AF_INET;
     in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
-    in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 177;
+    in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
     in->sin_port = htons(1234);
 
     srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
@@ -585,7 +585,7 @@ static const char *get_ctrl_type(uint16_t type)
     return ctrl_type[type];
 }
 
-static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const uint8_t *buf, int size)
+static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const uint8_t *buf, int size, bool *handled)
 {
     struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
 
@@ -593,7 +593,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
     uint32_t timestamp = uclock_now(upipe_srt_handshake->uclock) / 27;
     struct sockaddr_storage addr;
 
-//    upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
+    upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
 
     if (type == SRT_CONTROL_TYPE_HANDSHAKE) {
         const uint8_t *cif = srt_get_control_packet_cif(buf);
@@ -655,7 +655,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             struct sockaddr_in *in = (struct sockaddr_in*)&addr;
             in->sin_family = AF_INET;
             in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
-            in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 177;
+            in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
             in->sin_port = htons(1234);
 
             srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
@@ -674,7 +674,8 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             uint8_t *out_ext = out_cif + SRT_HANDSHAKE_CIF_SIZE + SRT_HANDSHAKE_CIF_EXTENSION_SIZE;
 
             srt_set_handshake_extension_srt_version(out_ext, 2, 2, 2);
-            uint32_t flags = SRT_HANDSHAKE_EXT_FLAG_CRYPT | SRT_HANDSHAKE_EXT_FLAG_PERIODICNAK;
+            uint32_t flags = SRT_HANDSHAKE_EXT_FLAG_CRYPT | SRT_HANDSHAKE_EXT_FLAG_PERIODICNAK
+                | SRT_HANDSHAKE_EXT_FLAG_REXMITFLG | SRT_HANDSHAKE_EXT_FLAG_TSBPDSND | SRT_HANDSHAKE_EXT_FLAG_TSBPDRCV;
             srt_set_handshake_extension_srt_flags(out_ext, flags);
             srt_set_handshake_extension_receiver_tsbpd_delay(out_ext, 0);
             srt_set_handshake_extension_sender_tsbpd_delay(out_ext, 0);
@@ -685,7 +686,8 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             return uref;
 
         } else {
-            printf("HI\n");
+            *handled = true;
+            upipe_srt_handshake_set_upump_timer(upipe, NULL);
             // check 
         }
         } else {
@@ -737,7 +739,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             struct sockaddr_in *in = (struct sockaddr_in*)&addr;
             in->sin_family = AF_INET;
             in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
-            in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 177;
+            in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
             in->sin_port = htons(1234);
 
             srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
@@ -856,14 +858,17 @@ static void upipe_srt_handshake_input(struct upipe *upipe, struct uref *uref,
     }
 
     if (srt_get_packet_control(buf)) {
-        struct uref *reply = upipe_srt_handshake_input_control(upipe, buf, size);
+        bool handled = false;
+        struct uref *reply = upipe_srt_handshake_input_control(upipe, buf, size, &handled);
         ubase_assert(uref_block_unmap(uref, 0));
-        if (reply) {
+        if (!handled && !reply) {
+            upipe_srt_handshake_output_output(upipe_srt_handshake->control, uref, upump_p);
+        } else {
             uref_free(uref);
-            uref = reply;
+            if (reply) {
+                upipe_srt_handshake_output_output(upipe_srt_handshake->control, reply, upump_p);
+            }
         }
-        /* control goes through subpipe */
-        upipe_srt_handshake_output_output(upipe_srt_handshake->control, uref, upump_p);
     } else {
         ubase_assert(uref_block_unmap(uref, 0));
         /* let data packets pass through */
