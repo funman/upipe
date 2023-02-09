@@ -302,7 +302,7 @@ static void upipe_srt_handshake_timer(struct upump *upump)
 
     srt_set_packet_control(out, true);
     srt_set_packet_timestamp(out, now / 27);
-    srt_set_packet_dst_socket_id(out, upipe_srt_handshake->socket_id);
+    srt_set_packet_dst_socket_id(out, 0);
     srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
     srt_set_control_packet_subtype(out, 0);
     srt_set_control_packet_type_specific(out, 0);
@@ -434,7 +434,7 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     upipe_srt_handshake_require_uclock(upipe);
 
     // FIXME
-    upipe_srt_handshake->socket_id = 0;
+    upipe_srt_handshake->socket_id = 77;
     upipe_srt_handshake->syn_cookie = 1;
     upipe_srt_handshake->listener = true;
     upipe_srt_handshake->connected = false;
@@ -645,7 +645,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
 
             srt_set_packet_control(out, true);
             srt_set_packet_timestamp(out, timestamp);
-            srt_set_packet_dst_socket_id(out, upipe_srt_handshake->socket_id);
+            srt_set_packet_dst_socket_id(out, 0);
             srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
             srt_set_control_packet_subtype(out, 0);
             srt_set_control_packet_type_specific(out, 0);
