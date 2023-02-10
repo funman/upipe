@@ -871,7 +871,29 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
         }
     } else if (type == SRT_CONTROL_TYPE_KEEPALIVE) {
     } else if (type == SRT_CONTROL_TYPE_ACK) {
+        struct uref *uref = uref_block_alloc(upipe_srt_handshake->uref_mgr,
+                upipe_srt_handshake->ubuf_mgr, SRT_HEADER_SIZE);
+        if (!uref)
+            return NULL;
+        uint8_t *out;
+        int output_size = -1;
+        if (unlikely(!ubase_check(uref_block_write(uref, 0, &output_size, &out)))) {
+            uref_free(uref);
+            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+        }
+
+        srt_set_packet_control(out, true);
+        srt_set_packet_timestamp(out, timestamp);
+        srt_set_packet_dst_socket_id(out, upipe_srt_handshake->remote_socket_id);
+        srt_set_control_packet_type(out, SRT_CONTROL_TYPE_ACKACK);
+        srt_set_control_packet_subtype(out, 0);
+        srt_set_control_packet_type_specific(out, srt_get_control_packet_type_specific(buf));
+
+        uref_block_unmap(uref, 0);
+        return uref;
+        // should go to sender
     } else if (type == SRT_CONTROL_TYPE_NAK) {
+    } else if (type == SRT_CONTROL_TYPE_ACKACK) {
     } else if (type == SRT_CONTROL_TYPE_SHUTDOWN) {
         exit(0);
     }
