@@ -30,6 +30,7 @@
 #include "upipe/upipe.h"
 #include "upipe/uref_block.h"
 #include "upipe/uref_block_flow.h"
+#include "upipe/uref_pic.h" // XXX
 #include "upipe/uref_flow.h"
 #include "upipe/upipe_helper_upipe.h"
 #include "upipe/upipe_helper_subpipe.h"
@@ -402,8 +403,15 @@ static int upipe_srt_sender_check(struct upipe *upipe, struct uref *flow_format)
 /** @internal */
 static int upipe_srt_sender_input_set_flow_def(struct upipe *upipe, struct uref *flow_def)
 {
+    struct upipe *upipe_super = NULL;
+    upipe_srt_sender_input_get_super(upipe, &upipe_super);
+    struct upipe_srt_sender *upipe_srt_sender = upipe_srt_sender_from_upipe(upipe_super);
+
     if (flow_def == NULL)
         return UBASE_ERR_INVALID;
+
+    uref_pic_get_number(flow_def, &upipe_srt_sender->seqnum);
+
     return uref_flow_match_def(flow_def, EXPECTED_FLOW_DEF);
 }
 
