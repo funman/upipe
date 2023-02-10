@@ -72,6 +72,13 @@ static struct upipe *upipe_udp_sink;
 static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
                  int event, va_list args)
 {
+    if (event == UPROBE_SOURCE_END) {
+        /* This control can not fail, and will trigger restart of upump */
+        const char *uri;
+        upipe_get_uri(upipe, &uri);
+        return UBASE_ERR_NONE;
+    }
+
     if (event != UPROBE_UDPSRC_NEW_PEER)
         return uprobe_throw_next(uprobe, upipe, event, args);
 
@@ -180,12 +187,11 @@ int main(int argc, char *argv[])
     bool listener = srcpath && *srcpath == '@';
 
     /* srt source */
-    struct uprobe *p = uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp source");
     struct uprobe uprobe_udp;
-    uprobe_init(&uprobe_udp, catch_udp, p);
+    uprobe_init(&uprobe_udp, catch_udp, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp source"));
 
     struct upipe_mgr *upipe_udpsrc_mgr = upipe_udpsrc_mgr_alloc();
-    upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr, listener ? &uprobe_udp : p);
+    upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr, &uprobe_udp);
     upipe_mgr_release(upipe_udpsrc_mgr);
 
     struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc();
