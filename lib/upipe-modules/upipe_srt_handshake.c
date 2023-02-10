@@ -32,6 +32,7 @@
 #include "upipe/uref.h"
 #include "upipe/uref_block.h"
 #include "upipe/uref_block_flow.h"
+#include "upipe/uref_pic.h" // XXX
 #include "upipe/uref_clock.h"
 #include "upipe/upipe.h"
 #include "upipe/upipe_helper_upipe.h"
@@ -98,6 +99,7 @@ struct upipe_srt_handshake {
     uint32_t syn_cookie;
     uint32_t socket_id; /* ours */
     uint32_t remote_socket_id; /* theirs */
+    uint32_t isn;
 
     bool expect_conclusion;
 
@@ -433,6 +435,7 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
 
     upipe_srt_handshake->socket_id = 77; // TODO: random?
     upipe_srt_handshake->syn_cookie = 1;
+    upipe_srt_handshake->isn = 0;
     upipe_srt_handshake->listener = true;
     upipe_srt_handshake->last_hs_sent = 0;
     
@@ -641,9 +644,9 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
 
             uint32_t mtu = srt_get_handshake_mtu(cif);
             uint32_t mfw = srt_get_handshake_mfw(cif);
-            uint32_t isn = srt_get_handshake_isn(cif);
+            upipe_srt_handshake->isn = srt_get_handshake_isn(cif);
 
-            upipe_dbg_va(upipe, "mtu %u mfw %u isn %u", mtu, mfw, isn);
+            upipe_dbg_va(upipe, "mtu %u mfw %u isn %u", mtu, mfw, upipe_srt_handshake->isn);
             upipe_dbg_va(upipe, "cookie %08x", syn_cookie);
 
             upipe_srt_handshake->syn_cookie = syn_cookie;
@@ -716,6 +719,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
                     flow_def = uref_dup(flow_def);
                     if (flow_def) {
                         uref_flow_set_id(flow_def, upipe_srt_handshake->remote_socket_id);
+                        uref_pic_set_number(flow_def, upipe_srt_handshake->isn);
                         upipe_srt_handshake_store_flow_def(upipe, flow_def);
                     }
                 }
@@ -833,7 +837,8 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             srt_set_handshake_type(out_cif, SRT_HANDSHAKE_TYPE_CONCLUSION);
             srt_set_handshake_syn_cookie(out_cif, 0);
             srt_set_handshake_socket_id(out_cif, upipe_srt_handshake->socket_id);
-            srt_set_handshake_isn(out_cif, srt_get_handshake_isn(cif));
+            upipe_srt_handshake->isn = srt_get_handshake_isn(cif);
+            srt_set_handshake_isn(out_cif, upipe_srt_handshake->isn);
             srt_set_handshake_mtu(out_cif, 1500);
             srt_set_handshake_mfw(out_cif, 8192);
 
@@ -861,6 +866,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
                 flow_def = uref_dup(flow_def);
                 if (flow_def) {
                     uref_flow_set_id(flow_def, upipe_srt_handshake->remote_socket_id);
+                    uref_pic_set_number(flow_def, upipe_srt_handshake->isn);
                     upipe_srt_handshake_store_flow_def(upipe, flow_def);
                 }
             }
