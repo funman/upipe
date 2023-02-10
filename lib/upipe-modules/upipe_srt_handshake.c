@@ -905,7 +905,7 @@ static void upipe_srt_handshake_input(struct upipe *upipe, struct uref *uref,
         struct uref *reply = upipe_srt_handshake_input_control(upipe, buf, size, &handled);
         ubase_assert(uref_block_unmap(uref, 0));
         if (!handled && !reply) {
-            upipe_srt_handshake_output_output(upipe_srt_handshake->control, uref, upump_p);
+            upipe_srt_handshake_output(upipe, uref, upump_p);
         } else {
             uref_free(uref);
             if (reply) {
