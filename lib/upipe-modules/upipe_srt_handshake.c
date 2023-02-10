@@ -878,7 +878,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
     } else if (type == SRT_CONTROL_TYPE_KEEPALIVE) {
     } else if (type == SRT_CONTROL_TYPE_ACK) {
         struct uref *uref = uref_block_alloc(upipe_srt_handshake->uref_mgr,
-                upipe_srt_handshake->ubuf_mgr, SRT_HEADER_SIZE);
+                upipe_srt_handshake->ubuf_mgr, SRT_HEADER_SIZE + 4 /* WTF */);
         if (!uref)
             return NULL;
         uint8_t *out;
