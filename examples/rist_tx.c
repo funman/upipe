@@ -58,6 +58,7 @@
 #include "upipe-modules/upipe_srt_handshake.h"
 
 #include <fcntl.h>
+#include <arpa/inet.h>
 
 #define UDICT_POOL_DEPTH 10
 #define UREF_POOL_DEPTH 10
@@ -90,11 +91,41 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
         /* This control can not fail, and will trigger restart of upump */
         upipe_get_uri(upipe, &uri);
         return UBASE_ERR_NONE;
-    case UPROBE_UDPSRC_NEW_PEER:
+    case UPROBE_UDPSRC_NEW_PEER: {
+        int udp_fd;
+        int sig = va_arg(args, int);
+        if (sig != UPIPE_UDPSRC_SIGNATURE)
+            break;
+
+        const struct sockaddr *s = va_arg(args, struct sockaddr*);
+        const socklen_t *len = va_arg(args, socklen_t *);
+
+        char uri[INET6_ADDRSTRLEN+6];
+        uint16_t port = 0;
+        if (s->sa_family == AF_INET) {
+            struct sockaddr_in *in = (struct sockaddr_in *)s;
+            inet_ntop(AF_INET, &in->sin_addr, uri, sizeof(uri));
+            port = ntohs(in->sin_port);
+        } else {
+            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)s;
+            inet_ntop(AF_INET6, &in6->sin6_addr, uri, sizeof(uri));
+            port = ntohs(in6->sin6_port);
+        }
+
+        size_t uri_len = strlen(uri);
+        sprintf(&uri[uri_len], ":%hu", port);
+        upipe_warn_va(upipe, "%s", uri);
+
+        ubase_assert(upipe_udpsrc_get_fd(upipe_udpsrc_srt, &udp_fd));
+        ubase_assert(upipe_udpsink_set_fd(upipe_udpsink, dup(udp_fd)));
+
+        ubase_assert(upipe_udpsink_set_peer(upipe_udpsink, s, *len));
+
         return UBASE_ERR_NONE;
-    default:
-        return uprobe_throw_next(uprobe, upipe, event, args);
     }
+    default:
+    }
+    return uprobe_throw_next(uprobe, upipe, event, args);
 }
 
 /** definition of our uprobe */
@@ -148,6 +179,8 @@ int main(int argc, char *argv[])
     srcpath = argv[optind++];
     dirpath = argv[optind++];
     latency = argv[optind++];
+
+    bool listener = dirpath && *dirpath == '@';
 
     /* setup environment */
 
@@ -206,6 +239,8 @@ int main(int argc, char *argv[])
     struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc();
     struct upipe *upipe_srt_handshake = upipe_void_alloc_output(upipe_udpsrc_srt, upipe_srt_handshake_mgr,
             uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt handshake"));
+    upipe_set_option(upipe_srt_handshake, "listener", listener ? "1" : "0");
+
     upipe_mgr_release(upipe_srt_handshake_mgr);
 
     upipe_mgr_release(upipe_udpsrc_mgr);
@@ -226,19 +261,25 @@ int main(int argc, char *argv[])
             uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp sink"));
     upipe_release(upipe_udpsink);
 
-    if (!ubase_check(upipe_set_uri(upipe_udpsink, dirpath))) {
-        return EXIT_FAILURE;
-    }
-
     upipe_set_output(upipe_srt_handshake_sub, upipe_udpsink);
 
-    int udp_fd = -1;
-    ubase_assert(upipe_udpsink_get_fd(upipe_udpsink, &udp_fd));
-    int flags = fcntl(udp_fd, F_GETFL);
-    flags |= O_NONBLOCK;
-    if (fcntl(udp_fd, F_SETFL, flags) < 0)
-        upipe_err(upipe_udpsink, "Could not set flags");;
-    ubase_assert(upipe_udpsrc_set_fd(upipe_udpsrc_srt, udp_fd));
+    if (listener) {
+        if (!ubase_check(upipe_set_uri(upipe_udpsrc_srt, dirpath))) {
+            return EXIT_FAILURE;
+        }
+    } else {
+        if (!ubase_check(upipe_set_uri(upipe_udpsink, dirpath))) {
+            return EXIT_FAILURE;
+        }
+
+        int udp_fd = -1;
+        ubase_assert(upipe_udpsink_get_fd(upipe_udpsink, &udp_fd));
+        int flags = fcntl(udp_fd, F_GETFL);
+        flags |= O_NONBLOCK;
+        if (fcntl(udp_fd, F_SETFL, flags) < 0)
+            upipe_err(upipe_udpsink, "Could not set flags");;
+        ubase_assert(upipe_udpsrc_set_fd(upipe_udpsrc_srt, udp_fd));
+    }
 
     if (0) {
         upipe_dump_open(NULL, NULL, "dump.dot", NULL, upipe_udpsink, upipe_udpsrc, upipe_udpsrc_srt, NULL);
