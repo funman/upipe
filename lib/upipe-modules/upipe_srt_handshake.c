@@ -612,7 +612,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
     uint32_t timestamp = uclock_now(upipe_srt_handshake->uclock) / 27;
     struct sockaddr_storage addr;
 
-    upipe_dbg_va(upipe, "control pkt %s", get_ctrl_type(type));
+    upipe_verbose_va(upipe, "control pkt %s", get_ctrl_type(type));
 
     if (type == SRT_CONTROL_TYPE_HANDSHAKE) {
         const uint8_t *cif = srt_get_control_packet_cif(buf);
@@ -789,7 +789,6 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             uref_block_unmap(uref, 0);
             return uref;
         } else {
-            uint32_t socket_id = srt_get_handshake_socket_id(cif);
             if (version != 5 || encryption != SRT_HANDSHAKE_CIPHER_NONE
                     || hs_type != SRT_HANDSHAKE_TYPE_CONCLUSION
                     || syn_cookie != upipe_srt_handshake->syn_cookie
