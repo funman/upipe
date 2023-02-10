@@ -910,7 +910,11 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
         return;
     }
 
-    assert(!srt_get_packet_control(buf));
+    if (srt_get_packet_control(buf)) {
+        ubase_assert(uref_block_unmap(uref, 0));
+        uref_free(uref);
+        return;
+    }
 
     /* data */
     assert(upipe_srt_receiver->control);
