@@ -926,7 +926,6 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
     bool retransmit = srt_get_data_packet_retransmit(buf);
     uint32_t num = srt_get_data_packet_message_number(buf);
     uint32_t ts = srt_get_packet_timestamp(buf);
-    uint32_t socket_id = srt_get_packet_dst_socket_id(buf);
     ubase_assert(uref_block_unmap(uref, 0));
 
     uref_block_resize(uref, SRT_HEADER_SIZE, -1); /* skip SRT header */
