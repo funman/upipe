@@ -320,11 +320,11 @@ static void upipe_srt_handshake_timer(struct upump *upump)
 
     srt_set_handshake_mtu(out_cif, 1500);
     srt_set_handshake_mfw(out_cif, 8192);
-    srt_set_handshake_version(out_cif, SRT_HANDSHAKE_VERSION);
+    srt_set_handshake_version(out_cif, 4);
     srt_set_handshake_encryption(out_cif, SRT_HANDSHAKE_CIPHER_NONE);
-    srt_set_handshake_extension(out_cif, SRT_MAGIC_CODE);
+    srt_set_handshake_extension(out_cif, SRT_HANDSHAKE_EXT_KMREQ);
     srt_set_handshake_type(out_cif, SRT_HANDSHAKE_TYPE_INDUCTION);
-    srt_set_handshake_syn_cookie(out_cif, upipe_srt_handshake->syn_cookie);
+    srt_set_handshake_syn_cookie(out_cif, 0);
     srt_set_handshake_socket_id(out_cif, upipe_srt_handshake->socket_id);
 
     uref_block_unmap(uref, 0);
