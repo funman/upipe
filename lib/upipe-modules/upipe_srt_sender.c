@@ -410,6 +410,10 @@ static int upipe_srt_sender_input_set_flow_def(struct upipe *upipe, struct uref 
     if (flow_def == NULL)
         return UBASE_ERR_INVALID;
 
+    uint64_t id;
+    if (ubase_check(uref_flow_get_id(flow_def, &id)))
+        upipe_srt_sender->socket_id = id;
+
     uref_pic_get_number(flow_def, &upipe_srt_sender->seqnum);
 
     return uref_flow_match_def(flow_def, EXPECTED_FLOW_DEF);
@@ -505,6 +509,11 @@ static inline void upipe_srt_sender_input(struct upipe *upipe, struct uref *uref
     upipe_srt_sender_check(upipe, NULL);
 
     if (!upipe_srt_sender->ubuf_mgr) {
+        uref_free(uref);
+        return;
+    }
+
+    if (upipe_srt_sender->socket_id == 0) {
         uref_free(uref);
         return;
     }
