@@ -79,6 +79,30 @@ static struct upipe *upipe_srt_handshake_sub;
 
 static struct uref_mgr *uref_mgr;
 
+static void addr_to_str(const struct sockaddr *s, char uri[INET6_ADDRSTRLEN+6])
+{
+    uint16_t port = 0;
+    switch(s->sa_family) {
+    case AF_INET: {
+        struct sockaddr_in *in = (struct sockaddr_in *)s;
+        inet_ntop(AF_INET, &in->sin_addr, uri, INET6_ADDRSTRLEN);
+        port = ntohs(in->sin_port);
+        break;
+    }
+    case AF_INET6: {
+        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)s;
+        inet_ntop(AF_INET6, &in6->sin6_addr, uri, INET6_ADDRSTRLEN);
+        port = ntohs(in6->sin6_port);
+        break;
+    }
+    default:
+        uri[0] = '\0';
+    }
+
+    size_t uri_len = strlen(uri);
+    sprintf(&uri[uri_len], ":%hu", port);
+}
+
 /** definition of our uprobe */
 static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
                  int event, va_list args)
@@ -101,20 +125,8 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
         const socklen_t *len = va_arg(args, socklen_t *);
 
         char uri[INET6_ADDRSTRLEN+6];
-        uint16_t port = 0;
-        if (s->sa_family == AF_INET) {
-            struct sockaddr_in *in = (struct sockaddr_in *)s;
-            inet_ntop(AF_INET, &in->sin_addr, uri, sizeof(uri));
-            port = ntohs(in->sin_port);
-        } else {
-            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)s;
-            inet_ntop(AF_INET6, &in6->sin6_addr, uri, sizeof(uri));
-            port = ntohs(in6->sin6_port);
-        }
-
-        size_t uri_len = strlen(uri);
-        sprintf(&uri[uri_len], ":%hu", port);
-        upipe_warn_va(upipe, "%s", uri);
+        addr_to_str(s, uri);
+        upipe_warn_va(upipe, "Remote %s", uri);
 
         ubase_assert(upipe_udpsrc_get_fd(upipe_udpsrc_srt, &udp_fd));
         ubase_assert(upipe_udpsink_set_fd(upipe_udpsink, dup(udp_fd)));
@@ -263,22 +275,34 @@ int main(int argc, char *argv[])
 
     upipe_set_output(upipe_srt_handshake_sub, upipe_udpsink);
 
+    int udp_fd = -1;
     if (listener) {
         if (!ubase_check(upipe_set_uri(upipe_udpsrc_srt, dirpath))) {
             return EXIT_FAILURE;
         }
+        ubase_assert(upipe_udpsrc_get_fd(upipe_udpsrc_srt, &udp_fd));
     } else {
         if (!ubase_check(upipe_set_uri(upipe_udpsink, dirpath))) {
             return EXIT_FAILURE;
         }
 
-        int udp_fd = -1;
         ubase_assert(upipe_udpsink_get_fd(upipe_udpsink, &udp_fd));
         int flags = fcntl(udp_fd, F_GETFL);
         flags |= O_NONBLOCK;
         if (fcntl(udp_fd, F_SETFL, flags) < 0)
             upipe_err(upipe_udpsink, "Could not set flags");;
         ubase_assert(upipe_udpsrc_set_fd(upipe_udpsrc_srt, udp_fd));
+    }
+
+    struct sockaddr_storage ad;
+    socklen_t peer_len = sizeof(ad);
+    struct sockaddr *peer = (struct sockaddr*) &ad;
+
+    if (!getsockname(udp_fd, peer, &peer_len)) {
+        char uri[INET6_ADDRSTRLEN+6];
+        addr_to_str(peer, uri);
+        upipe_warn_va(upipe_srt_handshake, "Local %s", uri); // XXX: INADDR_ANY when listening
+        upipe_srt_handshake_set_peer(upipe_srt_handshake, peer, peer_len);
     }
 
     if (0) {

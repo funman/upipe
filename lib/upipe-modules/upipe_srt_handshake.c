@@ -431,11 +431,6 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     upipe_srt_handshake->syn_cookie = 1;
     upipe_srt_handshake->isn = 0;
     upipe_srt_handshake->addr.ss_family = 0;
-    struct sockaddr_in *in = (struct sockaddr_in*)&upipe_srt_handshake->addr;
-    in->sin_family = AF_INET;
-    in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
-    in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
-    in->sin_port = htons(1234);
 
     upipe_srt_handshake->listener = true;
     upipe_srt_handshake->last_hs_sent = 0;
