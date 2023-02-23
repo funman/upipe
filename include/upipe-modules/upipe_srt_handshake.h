@@ -35,9 +35,33 @@ extern "C" {
 #endif
 
 #include "upipe/upipe.h"
+#include <sys/types.h>
+#include <sys/socket.h>
 
 #define UPIPE_SRT_HANDSHAKE_SIGNATURE UBASE_FOURCC('s','r','t','h')
 #define UPIPE_SRT_HANDSHAKE_OUTPUT_SIGNATURE UBASE_FOURCC('s','r','h','o')
+
+/** @This extends upipe_command with specific commands for srt handshake. */
+enum upipe_srt_handshake_command {
+    UPIPE_SRT_HANDSHAKE_SENTINEL = UPIPE_CONTROL_LOCAL,
+
+    /** set our peer address (const struct sockaddr *, socklen_t) **/
+    UPIPE_SRT_HANDSHAKE_SET_PEER,
+};
+
+/** @This sets the peer address
+ *
+ * @param upipe description structure of the pipe
+ * @param addr our address
+ * @param addrlen the size of addr
+ * @return false in case of error
+ */
+static inline int upipe_srt_handshake_set_peer(struct upipe *upipe,
+        const struct sockaddr *addr, socklen_t addrlen)
+{
+    return upipe_control(upipe, UPIPE_SRT_HANDSHAKE_SET_PEER, UPIPE_SRT_HANDSHAKE_SIGNATURE,
+            addr, addrlen);
+}
 
 /** @This returns the management structure for all srt handshakes sources.
  *

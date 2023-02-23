@@ -101,6 +101,8 @@ struct upipe_srt_handshake {
     uint32_t remote_socket_id; /* theirs */
     uint32_t isn;
 
+    struct sockaddr_storage addr;
+
     bool expect_conclusion;
 
     bool listener;
@@ -310,15 +312,7 @@ static void upipe_srt_handshake_timer(struct upump *upump)
     srt_set_control_packet_type_specific(out, 0);
     uint8_t *out_cif = (uint8_t*)srt_get_control_packet_cif(out);
 
-    struct sockaddr_storage addr;
-    memset(&addr, 0, sizeof(addr));
-    struct sockaddr_in *in = (struct sockaddr_in*)&addr;
-    in->sin_family = AF_INET;
-    in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
-    in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
-    in->sin_port = htons(1234);
-
-    srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
+    srt_set_handshake_ip(out_cif, (const struct sockaddr*)&upipe_srt_handshake->addr);
 
     srt_set_handshake_mtu(out_cif, 1500);
     srt_set_handshake_mfw(out_cif, 8192);
@@ -436,6 +430,13 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     upipe_srt_handshake->socket_id = 77; // TODO: random?
     upipe_srt_handshake->syn_cookie = 1;
     upipe_srt_handshake->isn = 0;
+    upipe_srt_handshake->addr.ss_family = 0;
+    struct sockaddr_in *in = (struct sockaddr_in*)&upipe_srt_handshake->addr;
+    in->sin_family = AF_INET;
+    in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
+    in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
+    in->sin_port = htons(1234);
+
     upipe_srt_handshake->listener = true;
     upipe_srt_handshake->last_hs_sent = 0;
     
@@ -547,6 +548,7 @@ static int upipe_srt_handshake_set_option(struct upipe *upipe, const char *optio
 static int _upipe_srt_handshake_control(struct upipe *upipe,
                                  int command, va_list args)
 {
+    struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
     UBASE_HANDLED_RETURN(upipe_srt_handshake_control_output(upipe, command, args));
     UBASE_HANDLED_RETURN(upipe_srt_handshake_control_outputs(upipe, command, args));
 
@@ -564,6 +566,16 @@ static int _upipe_srt_handshake_control(struct upipe *upipe,
             const char *option = va_arg(args, const char *);
             const char *value  = va_arg(args, const char *);
             return upipe_srt_handshake_set_option(upipe, option, value);
+        }
+
+        case UPIPE_SRT_HANDSHAKE_SET_PEER: {
+            UBASE_SIGNATURE_CHECK(args, UPIPE_SRT_HANDSHAKE_SIGNATURE)
+            const struct sockaddr *s = va_arg(args, const struct sockaddr *);
+            socklen_t addrlen = va_arg(args, socklen_t);
+            if (addrlen > sizeof(upipe_srt_handshake->addr))
+                addrlen = sizeof(upipe_srt_handshake->addr);
+            memcpy(&upipe_srt_handshake->addr, s, addrlen);
+            return UBASE_ERR_NONE;
         }
 
         default:
@@ -673,14 +685,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             srt_set_control_packet_type_specific(out, 0);
             uint8_t *out_cif = (uint8_t*)srt_get_control_packet_cif(out);
 
-            memset(&addr, 0, sizeof(addr));
-            struct sockaddr_in *in = (struct sockaddr_in*)&addr;
-            in->sin_family = AF_INET;
-            in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
-            in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
-            in->sin_port = htons(1234);
-
-            srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
+            srt_set_handshake_ip(out_cif, (const struct sockaddr*)&upipe_srt_handshake->addr);
 
             srt_set_handshake_mtu(out_cif, mtu);
             srt_set_handshake_mfw(out_cif, mfw);
@@ -770,14 +775,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             srt_set_control_packet_type_specific(out, 0);
             uint8_t *out_cif = (uint8_t*)srt_get_control_packet_cif(out);
 
-            memset(&addr, 0, sizeof(addr));
-            struct sockaddr_in *in = (struct sockaddr_in*)&addr;
-            in->sin_family = AF_INET;
-            in->sin_addr.s_addr = (10 << 24) | 1; // FIXME: need custom API
-            in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
-            in->sin_port = htons(1234);
-
-            srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
+            srt_set_handshake_ip(out_cif, (const struct sockaddr*)&upipe_srt_handshake->addr);
 
             srt_set_handshake_mtu(out_cif, 1500);
             srt_set_handshake_mfw(out_cif, 8192);
@@ -842,13 +840,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
             srt_set_handshake_mtu(out_cif, 1500);
             srt_set_handshake_mfw(out_cif, 8192);
 
-            memset(&addr, 0, sizeof(addr));
-            struct sockaddr_in *in = (struct sockaddr_in*)&addr;
-            in->sin_family = AF_INET;
-            printf("IP %s\n", ip_str);
-            in->sin_addr.s_addr = (192 << 24) | (168 << 16) | (0 << 8) | 242;
-            in->sin_port = htons(1234);
-            srt_set_handshake_ip(out_cif, (const struct sockaddr*)&addr);
+            srt_set_handshake_ip(out_cif, (const struct sockaddr*)&upipe_srt_handshake->addr);
 
             srt_set_handshake_extension_type(out_cif, srt_get_handshake_extension_type(cif));
             uint16_t ext_len = srt_get_handshake_extension_len(cif);
