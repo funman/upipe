@@ -109,6 +109,8 @@
 #define UBUF_DEFAULT_SIZE      8864
 #define UBUF_DEFAULT_SIZE_A    8864
 
+#define BUFFERS 586
+
 #define UDP_DEFAULT_TTL 0
 #define FI_DEFAULT_PORT 47592
 
@@ -466,10 +468,8 @@ static ssize_t rx (struct upipe *upipe)
     if (get_cq_comp (upipe_fisrc->rxcq, &upipe_fisrc->rx_cq_cntr, upipe_fisrc->rx_seq))
         return -1;
 
-    uint64_t n = upipe_fisrc->rx_cq_cntr % 586;
-
     struct iovec msg_iov = {
-        .iov_base = (uint8_t*)upipe_fisrc->rx_buf + n * UBUF_DEFAULT_SIZE_A,
+        .iov_base = (uint8_t*)upipe_fisrc->rx_buf + (upipe_fisrc->rx_cq_cntr % BUFFERS) * UBUF_DEFAULT_SIZE_A,
         .iov_len = UBUF_DEFAULT_SIZE,
     };
 
@@ -505,11 +505,10 @@ static int alloc_msgs (struct upipe *upipe)
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
     static const unsigned int packet_buffer_alignment = 8;
     static const unsigned int packet_size = UBUF_DEFAULT_SIZE;
-    static const unsigned int packet_count = 586;
 
     const int aligned_packet_size = (packet_size + packet_buffer_alignment - 1) & ~(packet_buffer_alignment - 1);
     assert(aligned_packet_size == UBUF_DEFAULT_SIZE_A);
-    int allocated_size = aligned_packet_size * packet_count;
+    int allocated_size = aligned_packet_size * BUFFERS;
 
     size_t buf_size = allocated_size;
     #define CDI_HUGE_PAGES_BYTE_SIZE    (2 * 1024 * 1024)
@@ -1002,8 +1001,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
         systime = uclock_now(upipe_fisrc->uclock);
     struct uref *uref = upipe_fisrc->output_uref;
 
-    uint64_t n = upipe_fisrc->rx_cq_cntr % 586;
-    uint8_t *buffer = upipe_fisrc->rx_buf + n * UBUF_DEFAULT_SIZE_A;
+    uint8_t *buffer = upipe_fisrc->rx_buf + (upipe_fisrc->rx_cq_cntr % BUFFERS) * UBUF_DEFAULT_SIZE_A;
     ssize_t s = rx(upipe);
 
     size_t offset = 0;
