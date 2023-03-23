@@ -1082,7 +1082,9 @@ static void upipe_fisrc_worker2(struct upump *upump)
         static uint64_t start;
         if (offset == 0)
             start = systime;
-        if (offset + s > 5184000) {
+        const size_t pixels = upipe_fisrc->width * upipe_fisrc->height;
+        const size_t pic_size = pixels * 5 / 2;
+        if (offset + s > pic_size) {
             upipe_dbg_va(upipe, "got pic after %.6f ms", ((float)(systime - start)) / 27000.);
         }
     }
@@ -1125,13 +1127,15 @@ static void upipe_fisrc_worker2(struct upump *upump)
     }
 
     static uint8_t x[5184000];
-    if (offset + s > 5184000)
-        s = 5184000 - offset;
+    const size_t pixels = upipe_fisrc->width * upipe_fisrc->height;
+    const size_t pic_size = pixels * 5 / 2;
+    if (offset + s > pic_size)
+        s = pic_size - offset;
     memcpy(&x[offset], buffer, s);
 
-    if (offset + s == 5184000) {
+    if (offset + s == pic_size) {
         const uint8_t *src = x;
-        for (int i = 0; i < 1920*1080; i += 2) {
+        for (int i = 0; i < pixels; i += 2) {
             uint8_t a = *src++;
             uint8_t b = *src++;
             uint8_t c = *src++;
@@ -1148,7 +1152,7 @@ static void upipe_fisrc_worker2(struct upump *upump)
     uref_pic_plane_unmap(uref, "u10l", 0, 0, -1, -1);
     uref_pic_plane_unmap(uref, "v10l", 0, 0, -1, -1);
 
-    if (offset + s >= 5184000) {
+    if (offset + s >= pic_size) {
         upipe_fisrc->output_uref = NULL;
         upipe_fisrc_output(upipe, uref, &upipe_fisrc->upump);
     }
