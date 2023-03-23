@@ -511,11 +511,12 @@ static int alloc_msgs (struct upipe *upipe)
     assert(aligned_packet_size == UBUF_DEFAULT_SIZE_A);
     int allocated_size = aligned_packet_size * packet_count;
 
-    upipe_fisrc->x_size = allocated_size;
+    size_t buf_size = allocated_size;
+    #define CDI_HUGE_PAGES_BYTE_SIZE    (2 * 1024 * 1024)
+    buf_size += CDI_HUGE_PAGES_BYTE_SIZE;
+    buf_size &= ~(CDI_HUGE_PAGES_BYTE_SIZE-1);
 
-    size_t buf_size = upipe_fisrc->x_size;
-
-    assert(upipe_fisrc->x_size >= upipe_fisrc->transfer_size);
+    assert(buf_size >= upipe_fisrc->transfer_size);
 
     errno = 0;
     long alignment = sysconf (_SC_PAGESIZE);
@@ -525,6 +526,8 @@ static int alloc_msgs (struct upipe *upipe)
     #define CDI_HUGE_PAGES_BYTE_SIZE    (2 * 1024 * 1024)
     buf_size += CDI_HUGE_PAGES_BYTE_SIZE;
     buf_size &= ~(CDI_HUGE_PAGES_BYTE_SIZE-1);
+
+    upipe_fisrc->x_size = buf_size;
 
     upipe_fisrc->buf = mmap(NULL, buf_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
     if (upipe_fisrc->buf == MAP_FAILED) {
@@ -1417,7 +1420,7 @@ static void upipe_fisrc_free(struct upipe *upipe)
     fi_close(&upipe_fisrc->domain->fid);
     fi_close(&upipe_fisrc->fabric->fid);
 
-    free (upipe_fisrc->buf); // FIXME : munmap
+    munmap(upipe_fisrc->buf, upipe_fisrc->x_size); // FIXME : free
 
     fi_freeinfo (upipe_fisrc->fi);
 
