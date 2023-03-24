@@ -70,6 +70,9 @@
 #include <upipe/ustring.h>
 #include <upipe/uref_pic.h>
 #include <upipe/uref_pic_flow.h>
+#include <upipe/uref_sound.h>
+#include <upipe/uref_sound_flow.h>
+#include <upipe/uref_sound_flow_formats.h>
 #include <upipe/uref_pic_flow_formats.h>
 #include <upipe/uref_clock.h>
 #include <upipe/upump.h>
@@ -214,6 +217,9 @@ struct upipe_fisrc {
     ProbeState probe_state;
     uint16_t pkt_num;
     char ip[INET6_ADDRSTRLEN];
+
+    bool audio;
+    unsigned int channels;
 
     size_t width;
     size_t height;
@@ -436,9 +442,10 @@ static int get_cq_comp(struct fid_cq *cq, uint64_t *cur, uint64_t total)
             if (ret != 1)
                 printf("cq_read %d\n", ret);
             (*cur) += ret;
+            return comp[0].len;
         } else if (ret == -FI_EAGAIN) {
             if (z++ > 10)
-                return 1;
+                return -1;
             continue;
         } else if (ret == -FI_EAVAIL) {
             struct fi_cq_err_entry cq_err = { 0 };
@@ -465,7 +472,8 @@ static ssize_t rx (struct upipe *upipe)
 {
     struct upipe_fisrc *upipe_fisrc = upipe_fisrc_from_upipe(upipe);
 
-    if (get_cq_comp (upipe_fisrc->rxcq, &upipe_fisrc->rx_cq_cntr, upipe_fisrc->rx_seq))
+    int ret = get_cq_comp (upipe_fisrc->rxcq, &upipe_fisrc->rx_cq_cntr, upipe_fisrc->rx_seq);
+    if (ret < 0)
         return -1;
 
     struct iovec msg_iov = {
@@ -489,7 +497,7 @@ static ssize_t rx (struct upipe *upipe)
         upipe_err(upipe, "fi_recvmsg");
     }
 
-    return msg_iov.iov_len;
+    return ret;
 }
 
 #define RET(cmd)        \
@@ -862,7 +870,8 @@ static void parse_cdi_extra(struct upipe *upipe, struct udict_mgr *udict_mgr, ui
     c.uri[sizeof(c.uri) - 1] = '\0';
     c.packing[0] = '\0';
 
-    if (strcmp(c.uri, "https://cdi.elemental.com/specs/baseline-video")) {
+    bool audio = !strcmp(c.uri, "https://cdi.elemental.com/specs/baseline-audio");
+    if (!audio && strcmp(c.uri, "https://cdi.elemental.com/specs/baseline-video")) {
         upipe_warn_va(upipe, "Unknown specification %s", c.uri);
         return;
     }
@@ -890,93 +899,160 @@ static void parse_cdi_extra(struct upipe *upipe, struct udict_mgr *udict_mgr, ui
         }
     }
 
-    if (major != 1 || minor != 0) {
-        upipe_warn_va(upipe, "Unknown cdi_profile_version %d.%d", major, minor);
-        goto end;
-    }
-
-    enum sampling sampling = sampling_Unknown;
-    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "sampling"))) {
-        sampling = parse_sampling(val);
-    }
-
-    enum colorimetry colorimetry = colorimetry_UNSPECIFIED;
-    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "colorimetry"))) {
-        colorimetry = parse_colorimetry(val);
-    }
-
-    enum range range = range_narrow;
-    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "range"))) {
-        range = parse_range(val);
-    }
-
-    size_t width = 0, height = 0, depth = 0;
-
-    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "width"))) {
-        width = atoi(val);
-    }
-
-    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "height"))) {
-        height = atoi(val);
-    }
-
-    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "depth"))) {
-        depth = atoi(val);
-    }
-
-    struct urational fps;
-    if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "exactframerate"))) {
-        if (sscanf(val, "%" SCNu64 "/%" SCNu64, &fps.num, &fps.den) != 2) {
-            fps.den = 1;
-            if (sscanf(val, "%" SCNu64, &fps.num) != 1)
-                fps.num = 0;
+    if (audio) {
+        if (major != 2 || minor != 0) {
+            upipe_warn_va(upipe, "Unknown cdi_profile_version %d.%d", major, minor);
+            goto end;
         }
-    }
-
-    if (depth != 10) {
-        upipe_err_va(upipe, "Bit depth %zu not supported", depth);
-        goto end;
+    } else {
+        if (major != 1 || minor != 0) {
+            upipe_warn_va(upipe, "Unknown cdi_profile_version %d.%d", major, minor);
+            goto end;
+        }
     }
 
     struct uref *flow_format = NULL;
-    switch (sampling) {
-    case sampling_YCbCr422:
-        if (depth == 8)
-            flow_format = uref_pic_flow_alloc_yuv422p(upipe_fisrc->uref_mgr);
-        else if (depth == 10)
-            flow_format = uref_pic_flow_alloc_yuv422p10le(upipe_fisrc->uref_mgr);
-        else if (depth == 12)
-            flow_format = uref_pic_flow_alloc_yuv422p12le(upipe_fisrc->uref_mgr);
-        else
-            break;
-        if (unlikely(flow_format == NULL)) {
-            upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+
+    if (audio) {
+        uint8_t channels = 0;
+
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "order"))) {
+            if (!strcmp(val, "SMPTE2110.(M)")) {
+                channels = 1;
+            } else if (!strcmp(val, "SMPTE2110.(DM)")) {
+                channels = 2;
+            } else if (!strcmp(val, "SMPTE2110.(ST)")) {
+                channels = 2;
+            } else if (!strcmp(val, "SMPTE2110.(LtRt)")) {
+                channels = 2;
+            } else if (!strcmp(val, "SMPTE2110.(51)")) {
+                channels = 6;
+            } else if (!strcmp(val, "SMPTE2110.(71)")) {
+                channels = 8;
+            } else if (!strcmp(val, "SMPTE2110.(222)")) {
+                channels = 24;
+            } else if (!strcmp(val, "SMPTE2110.(SGRP)")) {
+                channels = 4;
+            } else {
+                upipe_err_va(upipe, "Channel layout %s not supported", val);
+                goto end;
+            }
+        } else {
+            upipe_err(upipe, "Channel layout not specified");
             goto end;
         }
-        break;
-    case sampling_Unknown: upipe_err(upipe, "Unknown sampling"); break;
-    case sampling_YCbCr444: upipe_err(upipe, "Unsupported 444 sampling"); break;
-    case sampling_RGB: upipe_err(upipe, "Unsupported RGB sampling"); break;
-    }
 
-    switch (colorimetry) {
-        default: break; // TODO
-    }
+        flow_format = uref_sound_flow_alloc_def(upipe_fisrc->uref_mgr,
+            "s32.", channels, 4 * channels);
+        upipe_fisrc->channels = channels;
 
-    switch (range) {
-        default: break; // TODO
-    }
+        uref_sound_flow_add_plane(flow_format, "all");
 
-    uref_pic_flow_set_hsize(flow_format, width);
-    uref_pic_flow_set_vsize(flow_format, height);
-    uref_pic_flow_set_fps(flow_format, fps);
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "rate"))) {
+            if (!strcmp(val, "48000") || !strcmp(val, "48kHz" /* ? */)) {
+                uref_sound_flow_set_rate(flow_format, 48000);
+            } else if (!strcmp(val, "96000") || !strcmp(val, "96kHz" /* ? */)) {
+                uref_sound_flow_set_rate(flow_format, 96000);
+            } else {
+                upipe_err_va(upipe, "Samplerate %s not supported", val);
+                uref_free(flow_format);
+                goto end;
+            }
+        } else {
+                upipe_err(upipe, "Samplerate not specified");
+                uref_free(flow_format);
+                goto end;
+        }
+
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "langage"))) {
+            uref_flow_set_languages(flow_format, 1);
+            uref_flow_set_language(flow_format, val, 0);
+        }
+
+    } else {
+        enum sampling sampling = sampling_Unknown;
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "sampling"))) {
+            sampling = parse_sampling(val);
+        }
+
+        enum colorimetry colorimetry = colorimetry_UNSPECIFIED;
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "colorimetry"))) {
+            colorimetry = parse_colorimetry(val);
+        }
+
+        enum range range = range_narrow;
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "range"))) {
+            range = parse_range(val);
+        }
+
+        size_t width = 0, height = 0, depth = 0;
+
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "width"))) {
+            width = atoi(val);
+        }
+
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "height"))) {
+            height = atoi(val);
+        }
+
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "depth"))) {
+            depth = atoi(val);
+        }
+
+        struct urational fps;
+        if (ubase_check(udict_get_string(udict, &val, UDICT_TYPE_STRING, "exactframerate"))) {
+            if (sscanf(val, "%" SCNu64 "/%" SCNu64, &fps.num, &fps.den) != 2) {
+                fps.den = 1;
+                if (sscanf(val, "%" SCNu64, &fps.num) != 1)
+                    fps.num = 0;
+            }
+        }
+
+        if (depth != 10) {
+            upipe_err_va(upipe, "Bit depth %zu not supported", depth);
+            goto end;
+        }
+
+        switch (sampling) {
+            case sampling_YCbCr422:
+                if (depth == 8)
+                    flow_format = uref_pic_flow_alloc_yuv422p(upipe_fisrc->uref_mgr);
+                else if (depth == 10)
+                    flow_format = uref_pic_flow_alloc_yuv422p10le(upipe_fisrc->uref_mgr);
+                else if (depth == 12)
+                    flow_format = uref_pic_flow_alloc_yuv422p12le(upipe_fisrc->uref_mgr);
+                else
+                    break;
+                if (unlikely(flow_format == NULL)) {
+                    upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+                    goto end;
+                }
+                break;
+            case sampling_Unknown: upipe_err(upipe, "Unknown sampling"); break;
+            case sampling_YCbCr444: upipe_err(upipe, "Unsupported 444 sampling"); break;
+            case sampling_RGB: upipe_err(upipe, "Unsupported RGB sampling"); break;
+        }
+
+        switch (colorimetry) {
+            default: break; // TODO
+        }
+
+        switch (range) {
+            default: break; // TODO
+        }
+
+        uref_pic_flow_set_hsize(flow_format, width);
+        uref_pic_flow_set_vsize(flow_format, height);
+        uref_pic_flow_set_fps(flow_format, fps);
+
+        upipe_fisrc->width = width;
+        upipe_fisrc->height = height;
+    }
 
     upipe_fisrc_store_flow_def(upipe, flow_format);
 
-    upipe_fisrc->width = width;
-    upipe_fisrc->height = height;
-
-    upipe_dbg_va(upipe, "stream id %hu", c.stream_identifier);
+    upipe_fisrc->audio = audio;
+    upipe_dbg_va(upipe, "%s stream id %hu", audio ? "audio" : "video", c.stream_identifier);
 
 end:
     udict_free(udict);
@@ -1009,7 +1085,6 @@ static void upipe_fisrc_worker2(struct upump *upump)
         return;
 
     assert(s >= 9);
-    assert(s == UBUF_DEFAULT_SIZE);
 
     uint8_t pt = buffer[0];
     uint16_t seq = get_16le(&buffer[1]);
@@ -1043,8 +1118,8 @@ static void upipe_fisrc_worker2(struct upump *upump)
 
                     total_payload_size,
                     max_latency_microsecs,
-                    sec,
-                    nsec,
+                        sec,
+                        nsec,
                     payload_user_data,
                     extra_data_size,
                     tx_start_time_microseconds);
@@ -1077,8 +1152,12 @@ static void upipe_fisrc_worker2(struct upump *upump)
     default: break;
     }
 
-    {
-//    upipe_dbg_va(upipe, "%s(offset=%zu) at %.6f", __func__, offset, ((float)systime) / 27000000.);
+    if (!upipe_fisrc->ubuf_mgr) {
+        upipe_err_va(upipe, "NO UBUF");
+        return;
+    }
+
+    if (!upipe_fisrc->audio) {
         static uint64_t start;
         if (offset == 0)
             start = systime;
@@ -1087,73 +1166,87 @@ static void upipe_fisrc_worker2(struct upump *upump)
         if (offset + s > pic_size) {
             upipe_dbg_va(upipe, "got pic after %.6f ms", ((float)(systime - start)) / 27000.);
         }
-    }
 
-    if (!upipe_fisrc->ubuf_mgr) {
-        upipe_err_va(upipe, "NO UBUF");
-        return;
-    }
+        static bool go = false;
+        if (offset == 0)
+            go = true;
+        if (!go)
+            return;
 
-    static bool go = false;
-    if (offset == 0)
-        go = true;
-    if (!go)
-        return;
+        if (unlikely(uref == NULL)) {
+            uref = uref_pic_alloc(upipe_fisrc->uref_mgr, upipe_fisrc->ubuf_mgr,
+                    upipe_fisrc->width, upipe_fisrc->height);
+            if (unlikely(uref == NULL)) {
+                upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+                upipe_err(upipe, "FATAL");
+                return;
+            }
+            upipe_fisrc->output_uref = uref;
+            uref_clock_set_cr_sys(uref, systime);
+            uref_clock_set_pts_prog(uref, systime);
+            upipe_throw_clock_ref(upipe, uref, systime, 0);
+            upipe_throw_clock_ts(upipe, uref);
+        }
 
-    if (unlikely(uref == NULL)) {
-        uref = uref_pic_alloc(upipe_fisrc->uref_mgr, upipe_fisrc->ubuf_mgr,
-                upipe_fisrc->width, upipe_fisrc->height);
+        uint16_t *y, *u, *v;
+        if (!ubase_check(uref_pic_plane_write(uref, "y10l", 0, 0, -1, -1, (uint8_t**)&y))) {
+            upipe_err(upipe, "Cannot map y");
+        }
+        if (!ubase_check(uref_pic_plane_write(uref, "u10l", 0, 0, -1, -1, (uint8_t**)&u))) {
+            upipe_err(upipe, "Cannot map u");
+        }
+        if (!ubase_check(uref_pic_plane_write(uref, "v10l", 0, 0, -1, -1, (uint8_t**)&v))) {
+            upipe_err(upipe, "Cannot map v");
+        }
+
+        static uint8_t x[5184000];
+        if (offset + s > pic_size)
+            s = pic_size - offset;
+        memcpy(&x[offset], buffer, s);
+
+        if (offset + s == pic_size) {
+            const uint8_t *src = x;
+            for (int i = 0; i < pixels; i += 2) {
+                uint8_t a = *src++;
+                uint8_t b = *src++;
+                uint8_t c = *src++;
+                uint8_t d = *src++;
+                uint8_t e = *src++;
+                u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
+                y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
+                v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
+                y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
+            }
+        }
+
+        uref_pic_plane_unmap(uref, "y10l", 0, 0, -1, -1);
+        uref_pic_plane_unmap(uref, "u10l", 0, 0, -1, -1);
+        uref_pic_plane_unmap(uref, "v10l", 0, 0, -1, -1);
+
+        if (offset + s >= pic_size) {
+            upipe_fisrc->output_uref = NULL;
+            upipe_fisrc_output(upipe, uref, &upipe_fisrc->upump);
+        }
+    } else {
+        size_t samples = s / upipe_fisrc->channels / 3 /* s24 */;
+        uref = uref_sound_alloc(upipe_fisrc->uref_mgr, upipe_fisrc->ubuf_mgr,
+                samples);
         if (unlikely(uref == NULL)) {
             upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
             upipe_err(upipe, "FATAL");
             return;
         }
-        upipe_fisrc->output_uref = uref;
         uref_clock_set_cr_sys(uref, systime);
         uref_clock_set_pts_prog(uref, systime);
         upipe_throw_clock_ref(upipe, uref, systime, 0);
         upipe_throw_clock_ts(upipe, uref);
-    }
 
-    uint16_t *y, *u, *v;
-    if (!ubase_check(uref_pic_plane_write(uref, "y10l", 0, 0, -1, -1, (uint8_t**)&y))) {
-        upipe_err(upipe, "Cannot map y");
-    }
-    if (!ubase_check(uref_pic_plane_write(uref, "u10l", 0, 0, -1, -1, (uint8_t**)&u))) {
-        upipe_err(upipe, "Cannot map u");
-    }
-    if (!ubase_check(uref_pic_plane_write(uref, "v10l", 0, 0, -1, -1, (uint8_t**)&v))) {
-        upipe_err(upipe, "Cannot map v");
-    }
-
-    static uint8_t x[5184000];
-    const size_t pixels = upipe_fisrc->width * upipe_fisrc->height;
-    const size_t pic_size = pixels * 5 / 2;
-    if (offset + s > pic_size)
-        s = pic_size - offset;
-    memcpy(&x[offset], buffer, s);
-
-    if (offset + s == pic_size) {
-        const uint8_t *src = x;
-        for (int i = 0; i < pixels; i += 2) {
-            uint8_t a = *src++;
-            uint8_t b = *src++;
-            uint8_t c = *src++;
-            uint8_t d = *src++;
-            uint8_t e = *src++;
-            u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
-            y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
-            v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
-            y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
-         }
-    }
-
-    uref_pic_plane_unmap(uref, "y10l", 0, 0, -1, -1);
-    uref_pic_plane_unmap(uref, "u10l", 0, 0, -1, -1);
-    uref_pic_plane_unmap(uref, "v10l", 0, 0, -1, -1);
-
-    if (offset + s >= pic_size) {
-        upipe_fisrc->output_uref = NULL;
+        int32_t *sound;
+        uref_sound_plane_write_int32_t(uref, "all", 0, -1, &sound);
+        for (size_t i = 0; i < samples * upipe_fisrc->channels; i++) {
+            sound[i] = (buffer[3*i+0] << 24) | (buffer[3*i+1] << 16) | (buffer[3*i+2] << 8);
+        }
+        uref_sound_plane_unmap(uref, "all", 0, -1);
         upipe_fisrc_output(upipe, uref, &upipe_fisrc->upump);
     }
     }
