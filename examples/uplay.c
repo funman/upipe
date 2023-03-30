@@ -390,33 +390,38 @@ static int catch_audio(struct uprobe *uprobe, struct upipe *upipe,
     if (upipe_wlin_mgr == NULL) /* we're dying */
         return UBASE_ERR_UNHANDLED;
 
-    uprobe_throw(uprobe_main, NULL, UPROBE_FREEZE_UPUMP_MGR);
-    struct upipe_mgr *fdec_mgr = upipe_fdec_mgr_alloc();
-    struct upipe_mgr *avcdec_mgr = upipe_avcdec_mgr_alloc();
-    upipe_fdec_mgr_set_avcdec_mgr(fdec_mgr, avcdec_mgr);
-    upipe_mgr_release(avcdec_mgr);
-    struct upipe *avcdec = upipe_void_alloc(fdec_mgr,
-            uprobe_pfx_alloc(uprobe_use(uprobe_main),
-                             UPROBE_LOG_VERBOSE, "avcdec audio"));
-    assert(avcdec != NULL);
-    upipe_mgr_release(fdec_mgr);
-    char sample_fmt_str[5];
-    snprintf(sample_fmt_str, sizeof(sample_fmt_str), "%d", (int)AV_SAMPLE_FMT_S16);
-    upipe_set_option(avcdec, "request_sample_fmt", sample_fmt_str);
+    if (!ubase_check(uref_flow_match_def(flow_def, "sound."))) {
+        uprobe_throw(uprobe_main, NULL, UPROBE_FREEZE_UPUMP_MGR);
+        struct upipe_mgr *fdec_mgr = upipe_fdec_mgr_alloc();
+        struct upipe_mgr *avcdec_mgr = upipe_avcdec_mgr_alloc();
+        upipe_fdec_mgr_set_avcdec_mgr(fdec_mgr, avcdec_mgr);
+        upipe_mgr_release(avcdec_mgr);
+        struct upipe *avcdec = upipe_void_alloc(fdec_mgr,
+                uprobe_pfx_alloc(uprobe_use(uprobe_main),
+                    UPROBE_LOG_VERBOSE, "avcdec audio"));
+        assert(avcdec != NULL);
+        upipe_mgr_release(fdec_mgr);
+        char sample_fmt_str[5];
+        snprintf(sample_fmt_str, sizeof(sample_fmt_str), "%d", (int)AV_SAMPLE_FMT_S16);
+        upipe_set_option(avcdec, "request_sample_fmt", sample_fmt_str);
 
-    uprobe_throw(uprobe_main, NULL, UPROBE_THAW_UPUMP_MGR);
+        uprobe_throw(uprobe_main, NULL, UPROBE_THAW_UPUMP_MGR);
 
-    /* deport to the decoder thread */
-    avcdec = upipe_wlin_alloc(upipe_wlin_mgr,
-            uprobe_pfx_alloc(uprobe_use(uprobe_main),
-                             UPROBE_LOG_VERBOSE, "wlin audio"),
-            avcdec,
-            uprobe_pfx_alloc(uprobe_use(uprobe_main),
-                             UPROBE_LOG_VERBOSE, "wlin_x audio"),
-            DEC_IN_QUEUE_LENGTH, DEC_OUT_QUEUE_LENGTH);
-    assert(avcdec != NULL);
-    upipe_set_output(upipe, avcdec);
-
+        /* deport to the decoder thread */
+        avcdec = upipe_wlin_alloc(upipe_wlin_mgr,
+                uprobe_pfx_alloc(uprobe_use(uprobe_main),
+                    UPROBE_LOG_VERBOSE, "wlin audio"),
+                avcdec,
+                uprobe_pfx_alloc(uprobe_use(uprobe_main),
+                    UPROBE_LOG_VERBOSE, "wlin_x audio"),
+                DEC_IN_QUEUE_LENGTH, DEC_OUT_QUEUE_LENGTH);
+        assert(avcdec != NULL);
+        upipe_set_output(upipe, avcdec);
+        upipe = avcdec;
+    } else {
+        upipe_use(upipe);
+    }
+#if 0
     struct upipe_mgr *ffmt_mgr = upipe_ffmt_mgr_alloc();
     struct upipe_mgr *swr_mgr = upipe_swr_mgr_alloc();
     upipe_ffmt_mgr_set_swr_mgr(ffmt_mgr, swr_mgr);
@@ -424,27 +429,27 @@ static int catch_audio(struct uprobe *uprobe, struct upipe *upipe,
 
     /* request planar s16 */
     struct uref *uref = uref_sibling_alloc(flow_def);
-    uref_flow_set_def(uref, "sound.u8.");
-    uref_sound_flow_set_channels(uref, 1);
-    uref_sound_flow_set_sample_size(uref, 1);
+    uref_flow_set_def(uref, "sound.s32.");
+    uref_sound_flow_set_channels(uref, 2);
+    uref_sound_flow_set_sample_size(uref, 8);
     uref_sound_flow_set_planes(uref, 0);
-    uref_sound_flow_add_plane(uref, "l");
-    uref_sound_flow_set_rate(uref, 44100);
+    uref_sound_flow_add_plane(uref, "all");
+    uref_sound_flow_set_rate(uref, 48000);
 
-    avcdec = upipe_flow_chain_output(avcdec, ffmt_mgr,
+    upipe = upipe_flow_chain_output(upipe, ffmt_mgr,
             uprobe_pfx_alloc(uprobe_use(uprobe_main),
                              UPROBE_LOG_VERBOSE, "ffmt"),
             uref);
-    assert(avcdec != NULL);
+    assert(upipe != NULL);
     uref_free(uref);
     upipe_mgr_release(ffmt_mgr);
-
+#endif
     if (trickp != NULL)
-        avcdec = upipe_void_chain_output_sub(avcdec, trickp,
+        upipe = upipe_void_chain_output_sub(upipe, trickp,
                 uprobe_pfx_alloc(uprobe_use(uprobe_main),
                                  UPROBE_LOG_VERBOSE, "trickp audio"));
 
-    avcdec = upipe_void_chain_output_sub(avcdec, play,
+    upipe = upipe_void_chain_output_sub(upipe, play,
             uprobe_pfx_alloc(uprobe_use(uprobe_main),
                              UPROBE_LOG_VERBOSE, "play audio"));
 
@@ -487,8 +492,8 @@ static int catch_audio(struct uprobe *uprobe, struct upipe *upipe,
                              UPROBE_LOG_VERBOSE, "wsink_x audio"),
             SOUND_QUEUE_LENGTH);
     assert(sink != NULL);
-    upipe_set_output(avcdec, sink);
-    upipe_release(avcdec);
+    upipe_set_output(upipe, sink);
+    upipe_release(upipe);
     upipe_release(sink);
     return UBASE_ERR_NONE;
 }
