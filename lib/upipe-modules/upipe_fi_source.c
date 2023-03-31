@@ -1008,6 +1008,8 @@ static void parse_cdi_extra(struct upipe *upipe, struct udict_mgr *udict_mgr, ui
             }
         }
 
+        bool interlaced = ubase_check(udict_get_void(udict, NULL, UDICT_TYPE_VOID, "interlace"));
+
         if (depth != 10) {
             upipe_err_va(upipe, "Bit depth %zu not supported", depth);
             goto end;
@@ -1040,6 +1042,9 @@ static void parse_cdi_extra(struct upipe *upipe, struct udict_mgr *udict_mgr, ui
         switch (range) {
             default: break; // TODO
         }
+
+        if (!interlaced)
+            uref_pic_set_progressive(flow_format);
 
         uref_pic_flow_set_hsize(flow_format, width);
         uref_pic_flow_set_vsize(flow_format, height);
@@ -1205,17 +1210,38 @@ static void upipe_fisrc_worker2(struct upump *upump)
         memcpy(&x[offset], buffer, s);
 
         if (offset + s == pic_size) {
+            bool interlaced = !ubase_check(uref_pic_get_progressive(upipe_fisrc->flow_def));
             const uint8_t *src = x;
-            for (int i = 0; i < pixels; i += 2) {
-                uint8_t a = *src++;
-                uint8_t b = *src++;
-                uint8_t c = *src++;
-                uint8_t d = *src++;
-                uint8_t e = *src++;
-                u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
-                y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
-                v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
-                y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
+            if (interlaced) { // TODO : merge with below ?
+                const size_t h = upipe_fisrc->height;
+                const size_t w = upipe_fisrc->width;
+                for (int f = 0; f < 2; f++) {
+                    for (int i = f; i < h; i += 2) { // skip a line
+                        for (int j = 0; j < w; j += 2) { // 2 pixels per block
+                            uint8_t a = *src++;
+                            uint8_t b = *src++;
+                            uint8_t c = *src++;
+                            uint8_t d = *src++;
+                            uint8_t e = *src++;
+                            u[i*w / 2 + j/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
+                            y[i*w + j+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
+                            v[i*w / 2 + j/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
+                            y[i*w + j+1] = ((d & 0x03) << 8) | e;                 //4455555555
+                        }
+                    }
+                }
+            } else {
+                for (int i = 0; i < pixels; i += 2) {
+                    uint8_t a = *src++;
+                    uint8_t b = *src++;
+                    uint8_t c = *src++;
+                    uint8_t d = *src++;
+                    uint8_t e = *src++;
+                    u[i/2] = (a << 2)          | ((b >> 6) & 0x03); //1111111122
+                    y[i+0] = ((b & 0x3f) << 4) | ((c >> 4) & 0x0f); //2222223333
+                    v[i/2] = ((c & 0x0f) << 6) | ((d >> 2) & 0x3f); //3333444444
+                    y[i+1] = ((d & 0x03) << 8) | e;                 //4455555555
+                }
             }
         }
 
