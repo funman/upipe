@@ -102,6 +102,7 @@ struct upipe_srt_handshake {
     uint32_t isn;
 
     struct sockaddr_storage addr;
+    uint64_t establish_time;
 
     bool expect_conclusion;
 
@@ -303,9 +304,10 @@ static void upipe_srt_handshake_timer(struct upump *upump)
     }
 
     memset(out, 0, output_size);
+    upipe_srt_handshake->establish_time = now;
 
     srt_set_packet_control(out, true);
-    srt_set_packet_timestamp(out, now / 27);
+    srt_set_packet_timestamp(out, 0);
     srt_set_packet_dst_socket_id(out, 0);
     srt_set_control_packet_type(out, SRT_CONTROL_TYPE_HANDSHAKE);
     srt_set_control_packet_subtype(out, 0);
@@ -621,7 +623,8 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
     struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
 
     uint16_t type = srt_get_control_packet_type(buf);
-    uint32_t timestamp = uclock_now(upipe_srt_handshake->uclock) / 27;
+    uint64_t now = uclock_now(upipe_srt_handshake->uclock);
+    uint32_t timestamp = (now - upipe_srt_handshake->establish_time) / 27;
     struct sockaddr_storage addr;
 
     upipe_verbose_va(upipe, "control pkt %s", get_ctrl_type(type));
@@ -739,6 +742,8 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
                 return NULL;
             }
 
+            upipe_srt_handshake->establish_time = now;
+            timestamp = 0;
             uint32_t socket_id = srt_get_handshake_socket_id(cif);
             upipe_srt_handshake->remote_socket_id = socket_id; // TODO : flow def, transmit socket id to srtr
             char ip_str[INET6_ADDRSTRLEN];

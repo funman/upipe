@@ -92,6 +92,8 @@ struct upipe_srt_sender {
     uint32_t socket_id;
     uint32_t seqnum;
 
+    uint64_t establish_time;
+
     /** buffer latency */
     uint64_t latency;
 
@@ -389,11 +391,13 @@ static int upipe_srt_sender_check(struct upipe *upipe, struct uref *flow_format)
         return UBASE_ERR_NONE;
 
     if (upipe_srt_sender->upump_timer == NULL) {
+        upipe_srt_sender->establish_time = uclock_now(upipe_srt_sender->uclock); // FIXME
         struct upump *upump =
             upump_alloc_timer(upipe_srt_sender->upump_mgr,
                               upipe_srt_sender_timer, upipe, upipe->refcount,
                               UCLOCK_FREQ, UCLOCK_FREQ);
         upump_start(upump);
+
         upipe_srt_sender_set_upump_timer(upipe, upump);
     }
 
@@ -541,7 +545,7 @@ static inline void upipe_srt_sender_input(struct upipe *upipe, struct uref *uref
     uint32_t seqnum = upipe_srt_sender->seqnum++;
     memset(buf, 0, SRT_HEADER_SIZE);
     srt_set_packet_control(buf, false);
-    srt_set_packet_timestamp(buf, now / 27);
+    srt_set_packet_timestamp(buf, (now - upipe_srt_sender->establish_time) / 27);
     srt_set_packet_dst_socket_id(buf, upipe_srt_sender->socket_id);
     srt_set_data_packet_message_number(buf, seqnum);
     srt_set_data_packet_seq(buf, seqnum);
