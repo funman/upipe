@@ -512,6 +512,8 @@ static int upipe_srt_handshake_set_flow_def(struct upipe *upipe, struct uref *fl
         return UBASE_ERR_ALLOC;
 
     upipe_srt_handshake_store_flow_def(upipe, flow_def);
+    /* force sending flow definition immediately */
+    upipe_srt_handshake_output(upipe, NULL, NULL);
 
     return UBASE_ERR_NONE;
 }
@@ -721,6 +723,8 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
                         uref_flow_set_id(flow_def, upipe_srt_handshake->remote_socket_id);
                         uref_pic_set_number(flow_def, upipe_srt_handshake->isn);
                         upipe_srt_handshake_store_flow_def(upipe, flow_def);
+                        /* force sending flow definition immediately */
+                        upipe_srt_handshake_output(upipe, NULL, NULL);
                     }
                 }
             }
@@ -855,6 +859,8 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
                     uref_flow_set_id(flow_def, upipe_srt_handshake->remote_socket_id);
                     uref_pic_set_number(flow_def, upipe_srt_handshake->isn);
                     upipe_srt_handshake_store_flow_def(upipe, flow_def);
+                    /* force sending flow definition immediately */
+                    upipe_srt_handshake_output(upipe, NULL, NULL);
                 }
             }
 
