@@ -284,7 +284,7 @@ static struct uref *upipe_srt_handshake_alloc_hs(struct upipe *upipe, int ext_si
 
     int size = SRT_HEADER_SIZE + SRT_HANDSHAKE_CIF_SIZE;
     if (ext_size)
-        size += SRT_HANDSHAKE_CIF_EXTENSION_SIZE + ext_size;
+        size += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE + ext_size;
 
     struct uref *uref = uref_block_alloc(upipe_srt_handshake->uref_mgr,
             upipe_srt_handshake->ubuf_mgr, size);
@@ -713,16 +713,18 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
         upipe_verbose_va(upipe, "cookie %08x", syn_cookie);
 
         upipe_srt_handshake->syn_cookie = syn_cookie;
-        const size_t ext_size = 12; // HSREQ
+        const size_t ext_size = SRT_HANDSHAKE_HSREQ_SIZE;
         struct uref *uref = upipe_srt_handshake_alloc_hs(upipe, ext_size, timestamp, &out_cif);
         if (!uref)
             return NULL;
 
+        uint8_t *out_ext = srt_get_handshake_extension_buf(out_cif);
+
         srt_set_handshake_extension(out_cif, SRT_HANDSHAKE_EXT_HSREQ);
         srt_set_handshake_type(out_cif, SRT_HANDSHAKE_TYPE_CONCLUSION);
-        srt_set_handshake_extension_type(out_cif, SRT_HANDSHAKE_EXT_TYPE_HSREQ);
-        srt_set_handshake_extension_len(out_cif, ext_size / 4);
-        uint8_t *out_ext = out_cif + SRT_HANDSHAKE_CIF_SIZE + SRT_HANDSHAKE_CIF_EXTENSION_SIZE;
+        srt_set_handshake_extension_type(out_ext, SRT_HANDSHAKE_EXT_TYPE_HSREQ);
+        srt_set_handshake_extension_len(out_ext, ext_size / 4);
+        out_ext += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE;
 
         srt_set_handshake_extension_srt_version(out_ext, 2, 2, 2); // made up version
         uint32_t flags = SRT_HANDSHAKE_EXT_FLAG_CRYPT | SRT_HANDSHAKE_EXT_FLAG_PERIODICNAK
@@ -773,7 +775,7 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
 
         upipe_srt_handshake->isn = srt_get_handshake_isn(cif);
 
-        size -= SRT_HEADER_SIZE - SRT_HANDSHAKE_CIF_SIZE - SRT_HANDSHAKE_CIF_EXTENSION_SIZE; // FIXME
+        size -= SRT_HEADER_SIZE - SRT_HANDSHAKE_CIF_SIZE - SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE; // FIXME
         struct uref *uref = upipe_srt_handshake_alloc_hs(upipe, size, timestamp, &out_cif);
         if (!uref)
             return NULL;
@@ -781,14 +783,18 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
         srt_set_handshake_extension(out_cif, extension);
         srt_set_handshake_type(out_cif, SRT_HANDSHAKE_TYPE_CONCLUSION);
 
-        srt_set_handshake_extension_type(out_cif, srt_get_handshake_extension_type(cif));
-        uint16_t ext_len = srt_get_handshake_extension_len(cif);
-        srt_set_handshake_extension_len(out_cif, ext_len);
+        uint8_t *ext = srt_get_handshake_extension_buf((uint8_t*)cif);
+        uint8_t *out_ext = srt_get_handshake_extension_buf(out_cif);
+
+        srt_set_handshake_extension_type(out_ext, srt_get_handshake_extension_type(ext));
+        uint16_t ext_len = srt_get_handshake_extension_len(ext);
+        srt_set_handshake_extension_len(out_ext, ext_len);
+
+        ext += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE;
+        out_ext += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE;
 
         // TODO : interpret ext
-        memcpy(((uint8_t*)srt_get_handshake_extension_buf(out_cif)),
-                srt_get_handshake_extension_buf(cif),
-                4 * ext_len);
+        memcpy(out_ext, ext, 4 * ext_len);
 
         upipe_srt_handshake_finalize(upipe);
 
