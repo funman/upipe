@@ -27,6 +27,7 @@
  * @short Upipe module for SRT receivers
  */
 
+#include "upipe/config.h"
 #include "upipe/ubase.h"
 #include "upipe/uclock.h"
 #include "upipe/uref.h"
@@ -648,12 +649,14 @@ static struct upipe *upipe_srt_receiver_alloc(struct upipe_mgr *mgr,
     struct upipe *upipe = upipe_srt_receiver_alloc_void(mgr, uprobe, signature, args);
     struct upipe_srt_receiver *upipe_srt_receiver = upipe_srt_receiver_from_upipe(upipe);
 
+#ifdef UPIPE_HAVE_GCRYPT_H
     if (!gcry_control(GCRYCTL_INITIALIZATION_FINISHED_P)) {
         uprobe_err(uprobe, upipe, "Application did not initialize libgcrypt, see "
         "https://www.gnupg.org/documentation/manuals/gcrypt/Initializing-the-library.html");
         upipe_srt_receiver_free_void(upipe);
         return NULL;
     }
+#endif
 
     upipe_srt_receiver_init_urefcount(upipe);
     upipe_srt_receiver_init_urefcount_real(upipe);
@@ -786,12 +789,14 @@ static int upipe_srt_receiver_set_flow_def(struct upipe *upipe, struct uref *flo
         memcpy(upipe_srt_receiver->salt, opaque.v, opaque.size);
     }
 
+#ifdef UPIPE_HAVE_GCRYPT_H
     if (ubase_check(uref_attr_get_opaque(flow_def, &opaque, UDICT_TYPE_OPAQUE, "enc.even_key"))) {
         if (opaque.size > sizeof(upipe_srt_receiver->sek[0]))
             opaque.size = sizeof(upipe_srt_receiver->sek[0]);
         upipe_srt_receiver->sek_len = opaque.size;
         memcpy(upipe_srt_receiver->sek[0], opaque.v, opaque.size);
     }
+#endif
 
     flow_def = uref_dup(flow_def);
     if (!flow_def)
@@ -978,6 +983,7 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
             upipe_err(upipe, "Encryption not yet handled");
             uref_free(uref);
             return;
+#ifdef UPIPE_HAVE_GCRYPT_H
         } else {
             const uint8_t *salt = upipe_srt_receiver->salt;
             const uint8_t *sek = upipe_srt_receiver->sek[0];
@@ -1018,6 +1024,7 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
 
             uref_block_unmap(uref, 0);
         }
+#endif
     }
 
     /* first packet */

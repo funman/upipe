@@ -27,6 +27,7 @@
  * @short Upipe module for SRT handshakes
  */
 
+#include "upipe/config.h"
 #include "upipe/ubase.h"
 #include "upipe/uclock.h"
 #include "upipe/uref.h"
@@ -453,13 +454,14 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     struct upipe *upipe = upipe_srt_handshake_alloc_void(mgr, uprobe, signature, args);
     struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
 
+#ifdef UPIPE_HAVE_GCRYPT_H
     if (!gcry_control(GCRYCTL_INITIALIZATION_FINISHED_P)) {
         uprobe_err(uprobe, upipe, "Application did not initialize libgcrypt, see "
         "https://www.gnupg.org/documentation/manuals/gcrypt/Initializing-the-library.html");
         upipe_srt_handshake_free_void(upipe);
         return NULL;
     }
-
+#endif
 
     upipe_srt_handshake_init_urefcount(upipe);
     upipe_srt_handshake_init_urefcount_real(upipe);
@@ -735,6 +737,7 @@ static void upipe_srt_handshake_parse_hsreq(struct upipe *upipe, const uint8_t *
 static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *ext, uint8_t *kk, const uint8_t **wrap, uint8_t *wrap_len)
 {
     struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
+#ifdef UPIPE_HAVE_GCRYPT_H
 
     *kk = srt_km_get_kk(ext);
     uint8_t cipher = srt_km_get_cipher(ext);
@@ -783,6 +786,10 @@ static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *
     memcpy(upipe_srt_handshake->sek[0], osek, klen);
 
     return true;
+#else
+    upipe_err(upipe, "Encryption not built in");
+    return false;
+#endif
 }
 
 static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uint8_t *buf, int size, uint64_t now)
