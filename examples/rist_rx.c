@@ -24,6 +24,8 @@
  *
  */
 
+#include <upipe/config.h>
+
 #undef NDEBUG
 #include "upipe/uprobe.h"
 #include "upipe/uprobe_stdio.h"
@@ -53,6 +55,10 @@
 #include "upipe-modules/upipe_srt_receiver.h"
 
 #include <arpa/inet.h>
+
+#ifdef UPIPE_HAVE_GCRYPT_H
+#include <gcrypt.h>
+#endif
 
 #define UDICT_POOL_DEPTH 10
 #define UREF_POOL_DEPTH 10
@@ -163,6 +169,11 @@ int main(int argc, char *argv[])
     }
     srcpath = argv[optind++];
     dirpath = argv[optind++];
+
+#ifdef UPIPE_HAVE_GCRYPT_H
+    gcry_check_version(NULL);
+    gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
+#endif
 
     /* setup environment */
 

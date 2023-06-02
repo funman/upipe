@@ -34,6 +34,7 @@
 #include "upipe/uref_block_flow.h"
 #include "upipe/uref_pic.h" // XXX
 #include "upipe/uref_clock.h"
+#include "upipe/uref_attr.h"
 #include "upipe/upipe.h"
 #include "upipe/upipe_helper_upipe.h"
 #include "upipe/upipe_helper_subpipe.h"
@@ -54,6 +55,7 @@
 #include <arpa/inet.h>
 #include <limits.h>
 
+#include <gcrypt.h>
 
 /** @hidden */
 static int upipe_srt_handshake_check(struct upipe *upipe, struct uref *flow_format);
@@ -102,6 +104,17 @@ struct upipe_srt_handshake {
     uint32_t isn;
     uint32_t mtu;
     uint32_t mfw;
+
+
+    uint16_t receiver_tsbpd_delay;
+    uint16_t sender_tsbpd_delay;
+    uint32_t flags;
+    uint16_t major;
+    uint8_t minor, patch;
+
+    uint8_t salt[16];
+    uint8_t sek[2][32];
+    uint8_t sek_len;
 
     struct sockaddr_storage addr;
     uint64_t establish_time;
@@ -282,9 +295,7 @@ static struct uref *upipe_srt_handshake_alloc_hs(struct upipe *upipe, int ext_si
 {
     struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
 
-    int size = SRT_HEADER_SIZE + SRT_HANDSHAKE_CIF_SIZE;
-    if (ext_size)
-        size += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE + ext_size;
+    int size = SRT_HEADER_SIZE + SRT_HANDSHAKE_CIF_SIZE + ext_size;
 
     struct uref *uref = uref_block_alloc(upipe_srt_handshake->uref_mgr,
             upipe_srt_handshake->ubuf_mgr, size);
@@ -442,6 +453,14 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     struct upipe *upipe = upipe_srt_handshake_alloc_void(mgr, uprobe, signature, args);
     struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
 
+    if (!gcry_control(GCRYCTL_INITIALIZATION_FINISHED_P)) {
+        uprobe_err(uprobe, upipe, "Application did not initialize libgcrypt, see "
+        "https://www.gnupg.org/documentation/manuals/gcrypt/Initializing-the-library.html");
+        upipe_srt_handshake_free_void(upipe);
+        return NULL;
+    }
+
+
     upipe_srt_handshake_init_urefcount(upipe);
     upipe_srt_handshake_init_urefcount_real(upipe);
     upipe_srt_handshake_init_sub_outputs(upipe);
@@ -469,6 +488,15 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     
     upipe_srt_handshake->expect_conclusion = false;
     upipe_srt_handshake->control = NULL;
+
+    upipe_srt_handshake->receiver_tsbpd_delay = 0;
+    upipe_srt_handshake->sender_tsbpd_delay = 0;
+    upipe_srt_handshake->flags = 0;
+    upipe_srt_handshake->major = 0;
+    upipe_srt_handshake->minor = 0;
+    upipe_srt_handshake->patch = 0;
+
+    upipe_srt_handshake->sek_len = 0;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -658,12 +686,103 @@ static void upipe_srt_handshake_finalize(struct upipe *upipe)
         flow_def = uref_dup(flow_def);
         if (flow_def) {
             uref_flow_set_id(flow_def, upipe_srt_handshake->remote_socket_id);
+            struct udict_opaque opaque;
+            opaque.v = upipe_srt_handshake->salt;
+            opaque.size = 16;
+            if (!ubase_check(uref_attr_set_opaque(flow_def, opaque, UDICT_TYPE_OPAQUE, "enc.salt")))
+                upipe_err(upipe, "damn");
+
+            opaque.v = upipe_srt_handshake->sek[0];
+            opaque.size = upipe_srt_handshake->sek_len;
+            if (!ubase_check(uref_attr_set_opaque(flow_def, opaque, UDICT_TYPE_OPAQUE, "enc.even_key")))
+                upipe_err(upipe, "damn");
+
+            // TODO: odd key
+
             uref_pic_set_number(flow_def, upipe_srt_handshake->isn);
             upipe_srt_handshake_store_flow_def(upipe, flow_def);
             /* force sending flow definition immediately */
             upipe_srt_handshake_output(upipe, NULL, NULL);
         }
     }
+}
+
+static void upipe_srt_handshake_parse_hsreq(struct upipe *upipe, const uint8_t *ext)
+{
+    struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
+
+    srt_get_handshake_extension_srt_version(ext, &upipe_srt_handshake->major, &upipe_srt_handshake->minor, &upipe_srt_handshake->patch);
+    upipe_dbg_va(upipe, "SRT lib version %u.%u.%u", upipe_srt_handshake->major, upipe_srt_handshake->minor, upipe_srt_handshake->patch);
+
+    uint32_t flags = srt_get_handshake_extension_srt_flags(ext);
+    upipe_dbg_va(upipe, "%s%s%s%s%s%s%s%s",
+        (flags & SRT_HANDSHAKE_EXT_FLAG_TSBPDSND) ? "TSBPDSND " : "",
+        (flags & SRT_HANDSHAKE_EXT_FLAG_TSBPDRCV) ? "TSBPDRCV " : "",
+        (flags & SRT_HANDSHAKE_EXT_FLAG_CRYPT) ? "CRYPT " : "",
+        (flags & SRT_HANDSHAKE_EXT_FLAG_TLPKTDROP) ? "TLPKTDROP " : "",
+        (flags & SRT_HANDSHAKE_EXT_FLAG_PERIODICNAK) ? "PERIODICNAK " : "",
+        (flags & SRT_HANDSHAKE_EXT_FLAG_REXMITFLG) ? "REXMITFLG " : "",
+        (flags & SRT_HANDSHAKE_EXT_FLAG_STREAM) ? "STREAM " : "",
+        (flags & SRT_HANDSHAKE_EXT_FLAG_PACKET_FILTER) ? "PACKET_FILTER " : "");
+    upipe_srt_handshake->flags = flags;
+
+    upipe_srt_handshake->receiver_tsbpd_delay = srt_get_handshake_extension_receiver_tsbpd_delay(ext);
+    upipe_srt_handshake->sender_tsbpd_delay = srt_get_handshake_extension_sender_tsbpd_delay(ext);
+    upipe_dbg_va(upipe, "tsbpd delays: receiver %u, sender %u",
+            upipe_srt_handshake->receiver_tsbpd_delay, upipe_srt_handshake->sender_tsbpd_delay);
+}
+
+static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *ext, uint8_t *kk, const uint8_t **wrap, uint8_t *wrap_len)
+{
+    struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
+
+    *kk = srt_km_get_kk(ext);
+    uint8_t cipher = srt_km_get_cipher(ext);
+    if (cipher != SRT_KMREQ_CIPHER_AES) {
+        upipe_err_va(upipe, "Unsupported cipher %u", cipher);
+        return false;
+    }
+
+    uint8_t klen = 4 * srt_km_get_klen(ext);
+
+    memcpy(upipe_srt_handshake->salt, srt_km_get_salt(ext), 16);
+
+    *wrap = srt_km_get_wrap((uint8_t*)ext);
+
+    uint8_t kek[32];
+    const char *pass = "hunter2222"; // FIXME
+
+    gpg_error_t err = gcry_kdf_derive (pass, strlen(pass), GCRY_KDF_PBKDF2, GCRY_MD_SHA1,
+            &upipe_srt_handshake->salt[8], 8, 2048, klen, kek);
+    if (err) {
+        printf("pbkdf2 failed (%s)\n", gcry_strerror(err));
+        exit(0);
+        return false;
+    }
+
+    *wrap_len = ((*kk == 3) ? 2 : 1) * klen + 8;
+
+    uint8_t osek[32];
+
+    gcry_cipher_hd_t aes;
+    err = gcry_cipher_open(&aes, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_AESWRAP, 0);
+    if (err) {
+        printf("cipher open failed (0x%x)\n", err);
+        return false;
+    }
+
+    err = gcry_cipher_setkey(aes, kek, klen);
+    assert(!err);
+
+    err = gcry_cipher_decrypt(aes, osek, 16, *wrap, *wrap_len);
+    assert(!err);
+
+    gcry_cipher_close(aes);
+
+    upipe_srt_handshake->sek_len = klen;
+    memcpy(upipe_srt_handshake->sek[0], osek, klen);
+
+    return true;
 }
 
 static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uint8_t *buf, int size, uint64_t now)
@@ -714,7 +833,7 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
 
         upipe_srt_handshake->syn_cookie = syn_cookie;
         const size_t ext_size = SRT_HANDSHAKE_HSREQ_SIZE;
-        struct uref *uref = upipe_srt_handshake_alloc_hs(upipe, ext_size, timestamp, &out_cif);
+        struct uref *uref = upipe_srt_handshake_alloc_hs(upipe, ext_size + SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE, timestamp, &out_cif);
         if (!uref)
             return NULL;
 
@@ -773,9 +892,53 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
             return NULL;
         }
 
+        /* At least HSREQ is expected */
+        size -= SRT_HEADER_SIZE + SRT_HANDSHAKE_CIF_SIZE;
+        if (size < SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE + SRT_HANDSHAKE_HSREQ_SIZE) {
+            upipe_err(upipe, "Malformed conclusion handshake");
+            upipe_srt_handshake->expect_conclusion = false;
+            return NULL;
+        }
+
         upipe_srt_handshake->isn = srt_get_handshake_isn(cif);
 
-        size -= SRT_HEADER_SIZE - SRT_HANDSHAKE_CIF_SIZE - SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE; // FIXME
+        uint8_t *ext = srt_get_handshake_extension_buf((uint8_t*)cif);
+
+        uint8_t kk = 0;
+        const uint8_t *wrap;
+        uint8_t wrap_len = 0;
+
+        while (size >= SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE) {
+            uint16_t ext_type = srt_get_handshake_extension_type(ext);
+            uint16_t ext_len = 4 * srt_get_handshake_extension_len(ext);
+
+            size -= SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE;
+            ext += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE;
+
+            if (ext_len > size) {
+                upipe_err_va(upipe, "Malformed extension: %u > %u", ext_len, size);
+                break;
+            }
+
+            if (ext_type == SRT_HANDSHAKE_EXT_TYPE_HSREQ) {
+                if (ext_len >= SRT_HANDSHAKE_HSREQ_SIZE) 
+                    upipe_srt_handshake_parse_hsreq(upipe, ext);
+                else
+                    upipe_err_va(upipe, "Malformed HSREQ: %u < %u\n", ext_len,
+                            SRT_HANDSHAKE_HSREQ_SIZE);
+            } else if (ext_type == SRT_HANDSHAKE_EXT_TYPE_KMREQ) {
+                if (!srt_check_km(ext, ext_len) || !upipe_srt_handshake_parse_kmreq(upipe, ext, &kk, &wrap, &wrap_len))
+                    upipe_err(upipe, "Malformed KMREQ");
+            }
+
+            ext += ext_len;
+            size -= ext_len;
+        }
+
+        size = SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE + SRT_HANDSHAKE_HSREQ_SIZE;
+        if (wrap_len)
+            size += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE + SRT_KMREQ_COMMON_SIZE + wrap_len;
+
         struct uref *uref = upipe_srt_handshake_alloc_hs(upipe, size, timestamp, &out_cif);
         if (!uref)
             return NULL;
@@ -783,18 +946,37 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
         srt_set_handshake_extension(out_cif, extension);
         srt_set_handshake_type(out_cif, SRT_HANDSHAKE_TYPE_CONCLUSION);
 
-        uint8_t *ext = srt_get_handshake_extension_buf((uint8_t*)cif);
+        ext = srt_get_handshake_extension_buf((uint8_t*)cif);
         uint8_t *out_ext = srt_get_handshake_extension_buf(out_cif);
 
-        srt_set_handshake_extension_type(out_ext, srt_get_handshake_extension_type(ext));
-        uint16_t ext_len = srt_get_handshake_extension_len(ext);
-        srt_set_handshake_extension_len(out_ext, ext_len);
-
-        ext += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE;
+        srt_set_handshake_extension_type(out_ext, SRT_HANDSHAKE_EXT_TYPE_HSRSP);
+        srt_set_handshake_extension_len(out_ext, SRT_HANDSHAKE_HSREQ_SIZE / 4);
         out_ext += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE;
+        srt_set_handshake_extension_srt_version(out_ext, upipe_srt_handshake->major,
+                upipe_srt_handshake->minor, upipe_srt_handshake->patch);
+        srt_set_handshake_extension_srt_flags(out_ext, upipe_srt_handshake->flags);
+        srt_set_handshake_extension_sender_tsbpd_delay(out_ext, upipe_srt_handshake->sender_tsbpd_delay);
+        srt_set_handshake_extension_receiver_tsbpd_delay(out_ext, upipe_srt_handshake->receiver_tsbpd_delay);
 
-        // TODO : interpret ext
-        memcpy(out_ext, ext, 4 * ext_len);
+        out_ext += SRT_HANDSHAKE_HSREQ_SIZE;
+
+        if (wrap_len) {
+            srt_set_handshake_extension_type(out_ext, SRT_HANDSHAKE_EXT_TYPE_KMRSP);
+            srt_set_handshake_extension_len(out_ext, (SRT_KMREQ_COMMON_SIZE + wrap_len) / 4);
+            out_ext += SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE;
+            memset(out_ext, 0, SRT_KMREQ_COMMON_SIZE);
+            // XXX: move to bitstream?
+
+            out_ext[0] = 0x12;  // S V PT
+            out_ext[1] = 0x20; out_ext[2] = 0x29; // Sign
+            srt_km_set_kk(out_ext, kk);
+            srt_km_set_cipher(out_ext, SRT_KMREQ_CIPHER_AES);
+            out_ext[10] = 2; // SE
+            out_ext[14] = 4; // slen;
+            srt_km_set_klen(out_ext, upipe_srt_handshake->sek_len / 4);
+            memcpy(&out_ext[SRT_KMREQ_COMMON_SIZE-16], upipe_srt_handshake->salt, 16);
+            memcpy(&out_ext[SRT_KMREQ_COMMON_SIZE], wrap, wrap_len);
+        }
 
         upipe_srt_handshake_finalize(upipe);
 

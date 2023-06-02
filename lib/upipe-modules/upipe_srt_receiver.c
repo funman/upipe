@@ -53,6 +53,7 @@
 #include <arpa/inet.h>
 #include <limits.h>
 
+#include <gcrypt.h>
 
 /** @hidden */
 static int upipe_srt_receiver_check(struct upipe *upipe, struct uref *flow_format);
@@ -124,6 +125,11 @@ struct upipe_srt_receiver {
     uint64_t last_nack[65536];
 
     uint64_t rtt;
+
+    uint8_t salt[16];
+    uint8_t sek[2][32];
+    uint8_t sek_len;
+
     /** public upipe structure */
     struct upipe upipe;
 };
@@ -642,6 +648,13 @@ static struct upipe *upipe_srt_receiver_alloc(struct upipe_mgr *mgr,
     struct upipe *upipe = upipe_srt_receiver_alloc_void(mgr, uprobe, signature, args);
     struct upipe_srt_receiver *upipe_srt_receiver = upipe_srt_receiver_from_upipe(upipe);
 
+    if (!gcry_control(GCRYCTL_INITIALIZATION_FINISHED_P)) {
+        uprobe_err(uprobe, upipe, "Application did not initialize libgcrypt, see "
+        "https://www.gnupg.org/documentation/manuals/gcrypt/Initializing-the-library.html");
+        upipe_srt_receiver_free_void(upipe);
+        return NULL;
+    }
+
     upipe_srt_receiver_init_urefcount(upipe);
     upipe_srt_receiver_init_urefcount_real(upipe);
     upipe_srt_receiver_init_sub_outputs(upipe);
@@ -675,9 +688,9 @@ static struct upipe *upipe_srt_receiver_alloc(struct upipe_mgr *mgr,
     upipe_srt_receiver->loss = 0;
     upipe_srt_receiver->dups = 0;
 
-
     upipe_srt_receiver->latency = 2 * UCLOCK_FREQ;
 
+    upipe_srt_receiver->sek_len = 0;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -765,6 +778,20 @@ static int upipe_srt_receiver_set_flow_def(struct upipe *upipe, struct uref *flo
     uint64_t id;
     if (ubase_check(uref_flow_get_id(flow_def, &id)))
         upipe_srt_receiver->socket_id = id;
+
+    struct udict_opaque opaque;
+    if (ubase_check(uref_attr_get_opaque(flow_def, &opaque, UDICT_TYPE_OPAQUE, "enc.salt"))) {
+        if (opaque.size > 16)
+            opaque.size = 16;
+        memcpy(upipe_srt_receiver->salt, opaque.v, opaque.size);
+    }
+
+    if (ubase_check(uref_attr_get_opaque(flow_def, &opaque, UDICT_TYPE_OPAQUE, "enc.even_key"))) {
+        if (opaque.size > sizeof(upipe_srt_receiver->sek[0]))
+            opaque.size = sizeof(upipe_srt_receiver->sek[0]);
+        upipe_srt_receiver->sek_len = opaque.size;
+        memcpy(upipe_srt_receiver->sek[0], opaque.v, opaque.size);
+    }
 
     flow_def = uref_dup(flow_def);
     if (!flow_def)
@@ -926,9 +953,10 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
     bool retransmit = srt_get_data_packet_retransmit(buf);
     uint32_t num = srt_get_data_packet_message_number(buf);
     uint32_t ts = srt_get_packet_timestamp(buf);
-    ubase_assert(uref_block_unmap(uref, 0));
 
+    ubase_assert(uref_block_unmap(uref, 0));
     uref_block_resize(uref, SRT_HEADER_SIZE, -1); /* skip SRT header */
+    total_size -= SRT_HEADER_SIZE;
 
 //    upipe_dbg_va(upipe, "Data seq %u", seqnum);
 
@@ -944,10 +972,52 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
         uref_free(uref);
         return;
     }
+
     if (encryption != SRT_DATA_ENCRYPTION_CLEAR) {
-        upipe_err(upipe, "Encryption not yet handled");
-        uref_free(uref);
-        return;
+        if (upipe_srt_receiver->sek_len == 0) {
+            upipe_err(upipe, "Encryption not yet handled");
+            uref_free(uref);
+            return;
+        } else {
+            const uint8_t *salt = upipe_srt_receiver->salt;
+            const uint8_t *sek = upipe_srt_receiver->sek[0];
+            int key_len = upipe_srt_receiver->sek_len;
+
+            uint8_t iv[16];
+            memset(&iv, 0, 16);
+            iv[10] = (seqnum >> 24) & 0xff;
+            iv[11] = (seqnum >> 16) & 0xff;
+            iv[12] = (seqnum >>  8) & 0xff;
+            iv[13] =  seqnum & 0xff;
+            for (int i = 0; i < 112/8; i++)
+                iv[i] ^= salt[i];
+
+            uint8_t *buf;
+            size = total_size;
+
+            ubase_assert(uref_block_write(uref, 0, &size, &buf));
+            assert(size == total_size);
+
+            gcry_cipher_hd_t aes;
+            gpg_error_t err;
+            err = gcry_cipher_open(&aes, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_CTR, 0);
+            if (err) {
+                printf("cipher open failed (0x%x)\n", err);
+            }
+
+            err = gcry_cipher_setkey(aes, sek, key_len);
+            assert(!err);
+
+            err = gcry_cipher_setctr(aes, iv, 16);
+            assert(!err);
+
+            err = gcry_cipher_encrypt(aes, buf, size, NULL, 0);
+            assert(!err);
+
+            gcry_cipher_close(aes);
+
+            uref_block_unmap(uref, 0);
+        }
     }
 
     /* first packet */
