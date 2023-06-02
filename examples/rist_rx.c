@@ -132,9 +132,10 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
 }
 
 static void usage(const char *argv0) {
-    fprintf(stdout, "Usage: %s [-d]  <udp source> <udp dest>", argv0);
+    fprintf(stdout, "Usage: %s [-d] [-k password] <udp source> <udp dest>", argv0);
     fprintf(stdout, "   -d: more verbose\n");
     fprintf(stdout, "   -q: more quiet\n");
+    fprintf(stdout, "   -k encryption password\n");
     exit(EXIT_FAILURE);
 }
 
@@ -149,16 +150,20 @@ static void stop(struct upump *upump)
 int main(int argc, char *argv[])
 {
     char *dirpath, *srcpath;
+    char *password = NULL;
     int opt;
 
     /* parse options */
-    while ((opt = getopt(argc, argv, "qd")) != -1) {
+    while ((opt = getopt(argc, argv, "qdk:")) != -1) {
         switch (opt) {
             case 'd':
                 loglevel--;
                 break;
             case 'q':
                 loglevel++;
+                break;
+            case 'k':
+                password = optarg;
                 break;
             default:
                 usage(argv[0]);
@@ -221,6 +226,7 @@ int main(int argc, char *argv[])
             upipe_srt_handshake_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srth"));
     assert(upipe_srth);
     upipe_set_option(upipe_srth, "listener", listener ? "1" : "0");
+    upipe_srt_handshake_set_password(upipe_srth, password);
     upipe_mgr_release(upipe_srt_handshake_mgr);
 
     struct upipe *upipe_srth_sub = upipe_void_alloc_sub(upipe_srth,

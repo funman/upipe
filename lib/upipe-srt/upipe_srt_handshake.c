@@ -117,6 +117,8 @@ struct upipe_srt_handshake {
     uint8_t sek[2][32];
     uint8_t sek_len;
 
+    char *password;
+
     struct sockaddr_storage addr;
     uint64_t establish_time;
 
@@ -499,6 +501,7 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     upipe_srt_handshake->patch = 0;
 
     upipe_srt_handshake->sek_len = 0;
+    upipe_srt_handshake->password = NULL;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -637,6 +640,14 @@ static int _upipe_srt_handshake_control(struct upipe *upipe,
             return UBASE_ERR_NONE;
         }
 
+        case UPIPE_SRT_HANDSHAKE_SET_PASSWORD: {
+            UBASE_SIGNATURE_CHECK(args, UPIPE_SRT_HANDSHAKE_SIGNATURE)
+            const char *password = va_arg(args, const char*);
+            free(upipe_srt_handshake->password);
+            upipe_srt_handshake->password = password ? strdup(password) : NULL;
+            return UBASE_ERR_NONE;
+        }
+
         default:
             return UBASE_ERR_UNHANDLED;
     }
@@ -737,6 +748,11 @@ static void upipe_srt_handshake_parse_hsreq(struct upipe *upipe, const uint8_t *
 static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *ext, uint8_t *kk, const uint8_t **wrap, uint8_t *wrap_len)
 {
     struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
+    if (!upipe_srt_handshake->password) {
+        upipe_err(upipe, "Password not set");
+        return false;
+    }
+
 #ifdef UPIPE_HAVE_GCRYPT_H
 
     *kk = srt_km_get_kk(ext);
@@ -753,9 +769,9 @@ static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *
     *wrap = srt_km_get_wrap((uint8_t*)ext);
 
     uint8_t kek[32];
-    const char *pass = "hunter2222"; // FIXME
 
-    gpg_error_t err = gcry_kdf_derive (pass, strlen(pass), GCRY_KDF_PBKDF2, GCRY_MD_SHA1,
+    gpg_error_t err = gcry_kdf_derive(upipe_srt_handshake->password,
+            strlen(upipe_srt_handshake->password), GCRY_KDF_PBKDF2, GCRY_MD_SHA1,
             &upipe_srt_handshake->salt[8], 8, 2048, klen, kek);
     if (err) {
         upipe_err_va(upipe, "pbkdf2 failed (%s)", gcry_strerror(err));
@@ -1091,7 +1107,10 @@ static void upipe_srt_handshake_input(struct upipe *upipe, struct uref *uref,
  */
 static void upipe_srt_handshake_free(struct upipe *upipe)
 {
+    struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_upipe(upipe);
     upipe_throw_dead(upipe);
+
+    free(upipe_srt_handshake->password);
 
     upipe_srt_handshake_clean_output(upipe);
     upipe_srt_handshake_clean_upump_timer(upipe);
