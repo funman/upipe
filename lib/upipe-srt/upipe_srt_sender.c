@@ -43,7 +43,7 @@
 #include "upipe/upipe_helper_upump_mgr.h"
 #include "upipe/upipe_helper_upump.h"
 #include "upipe/upipe_helper_uclock.h"
-#include "upipe-modules/upipe_srt_sender.h"
+#include "upipe-srt/upipe_srt_sender.h"
 
 #include <limits.h>
 

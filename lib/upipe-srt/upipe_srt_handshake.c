@@ -48,7 +48,7 @@
 #include "upipe/upipe_helper_upump.h"
 #include "upipe/upipe_helper_uclock.h"
 
-#include "upipe-modules/upipe_srt_handshake.h"
+#include "upipe-srt/upipe_srt_handshake.h"
 
 #include <bitstream/haivision/srt.h>
 

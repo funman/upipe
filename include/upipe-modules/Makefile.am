@@ -91,7 +91,4 @@ myinclude_HEADERS = \
 	uref_graph_flow.h \
 	uref_graph.h \
 	upipe_graph.h \
-	upipe_srt_handshake.h \
-	upipe_srt_sender.h \
-	upipe_srt_receiver.h \
 	$(NULL)

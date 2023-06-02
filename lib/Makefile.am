@@ -102,5 +102,5 @@ SUBDIRS += upipe-bearssl
 endif
 
 if HAVE_SRT
-SUBDIRS += upump-srt
+SUBDIRS += upump-srt upipe-srt
 endif

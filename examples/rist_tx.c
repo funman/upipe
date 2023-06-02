@@ -54,8 +54,8 @@
 #include "upipe-modules/upipe_udp_source.h"
 #include "upipe-modules/upipe_udp_sink.h"
 
-#include "upipe-modules/upipe_srt_sender.h"
-#include "upipe-modules/upipe_srt_handshake.h"
+#include "upipe-srt/upipe_srt_sender.h"
+#include "upipe-srt/upipe_srt_handshake.h"
 
 #include <fcntl.h>
 #include <arpa/inet.h>

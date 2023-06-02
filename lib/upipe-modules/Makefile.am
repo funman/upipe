@@ -102,9 +102,6 @@ libupipe_modules_la_SOURCES += \
 	upipe_rtp_reorder.c \
 	upipe_s337_encaps.c \
 	upipe_vanc_decoder.c \
-	upipe_srt_handshake.c \
-	upipe_srt_sender.c \
-	upipe_srt_receiver.c \
 	$(NULL)
 libupipe_modules_la_CFLAGS = $(AM_CFLAGS) $(BITSTREAM_CFLAGS)
 endif
