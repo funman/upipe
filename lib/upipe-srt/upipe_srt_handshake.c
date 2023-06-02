@@ -758,8 +758,7 @@ static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *
     gpg_error_t err = gcry_kdf_derive (pass, strlen(pass), GCRY_KDF_PBKDF2, GCRY_MD_SHA1,
             &upipe_srt_handshake->salt[8], 8, 2048, klen, kek);
     if (err) {
-        printf("pbkdf2 failed (%s)\n", gcry_strerror(err));
-        exit(0);
+        upipe_err_va(upipe, "pbkdf2 failed (%s)", gcry_strerror(err));
         return false;
     }
 
@@ -770,7 +769,7 @@ static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *
     gcry_cipher_hd_t aes;
     err = gcry_cipher_open(&aes, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_AESWRAP, 0);
     if (err) {
-        printf("cipher open failed (0x%x)\n", err);
+        upipe_err_va(upipe, "Cipher open failed (0x%x)", err);
         return false;
     }
 

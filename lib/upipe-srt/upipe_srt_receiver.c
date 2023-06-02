@@ -460,7 +460,6 @@ next:
                 uref_attr_get_priv(uref_from_uchain(upipe_srt_receiver->queue.prev), &last_seq);
                 if (last_received != UINT64_MAX)
                     last_seq = last_received;
-//                printf("ACK up to %" PRIu64 "\n", last_seq);
                 srt_set_ack_last_ack_seq(out_cif, last_seq);
                 srt_set_ack_rtt(out_cif, 1000);
                 srt_set_ack_rtt_variance(out_cif, 100);
@@ -980,7 +979,7 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
 
     if (encryption != SRT_DATA_ENCRYPTION_CLEAR) {
         if (upipe_srt_receiver->sek_len == 0) {
-            upipe_err(upipe, "Encryption not yet handled");
+            upipe_err(upipe, "Encryption not handled");
             uref_free(uref);
             return;
 #ifdef UPIPE_HAVE_GCRYPT_H
@@ -1008,7 +1007,8 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
             gpg_error_t err;
             err = gcry_cipher_open(&aes, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_CTR, 0);
             if (err) {
-                printf("cipher open failed (0x%x)\n", err);
+                upipe_err_va(upipe, "Cipher open failed (0x%x)", err);
+                goto error;
             }
 
             err = gcry_cipher_setkey(aes, sek, key_len);
@@ -1021,7 +1021,7 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
             assert(!err);
 
             gcry_cipher_close(aes);
-
+error:
             uref_block_unmap(uref, 0);
         }
 #endif
