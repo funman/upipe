@@ -908,6 +908,9 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
 
             size_t wrap_len = ((kk == 3) ? 2 : 1) * klen + 8;
 
+            gcry_randomize(upipe_srt_handshake->sek[0], klen, GCRY_STRONG_RANDOM);
+            gcry_randomize(upipe_srt_handshake->salt, 16, GCRY_STRONG_RANDOM);
+
             upipe_srt_handshake->sek_len = klen;
             srt_km_set_klen(out_ext, upipe_srt_handshake->sek_len / 4);
             memcpy(&out_ext[SRT_KMREQ_COMMON_SIZE-16], upipe_srt_handshake->salt, 16);
