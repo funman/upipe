@@ -67,6 +67,8 @@ ts_encrypt_CFLAGS += $(GCRYPT_CFLAGS)
 ts_encrypt_LDADD += $(GCRYPT_LIBS)
 rist_rx_CFLAGS += $(GCRYPT_CFLAGS)
 rist_rx_LDADD += $(GCRYPT_LIBS)
+rist_tx_CFLAGS += $(GCRYPT_CFLAGS)
+rist_tx_LDADD += $(GCRYPT_LIBS)
 endif
 
 if HAVE_EV

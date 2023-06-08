@@ -60,6 +60,10 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 
+#ifdef UPIPE_HAVE_GCRYPT_H
+#include <gcrypt.h>
+#endif
+
 #define UDICT_POOL_DEPTH 10
 #define UREF_POOL_DEPTH 10
 #define UBUF_POOL_DEPTH 10
@@ -70,6 +74,7 @@ static void usage(const char *argv0) {
     fprintf(stdout, "Usage: %s [-d] <udp source> <udp dest> <latency>\n", argv0);
     fprintf(stdout, "   -d: more verbose\n");
     fprintf(stdout, "   -q: more quiet\n");
+    fprintf(stdout, "   -k encryption password\n");
     exit(EXIT_FAILURE);
 }
 
@@ -169,17 +174,22 @@ static void stop(struct upump *upump)
 int main(int argc, char *argv[])
 {
     char *srcpath, *dirpath, *latency;
+    char *password = NULL;
     int opt;
     enum uprobe_log_level loglevel = UPROBE_LOG_DEBUG;
 
     /* parse options */
-    while ((opt = getopt(argc, argv, "qd")) != -1) {
+    while ((opt = getopt(argc, argv, "qdk:")) != -1) {
         switch (opt) {
             case 'q':
                 loglevel++;
                 break;
             case 'd':
                 loglevel--;
+                break;
+                 break;
+            case 'k':
+                password = optarg;
                 break;
             default:
                 usage(argv[0]);
@@ -193,6 +203,11 @@ int main(int argc, char *argv[])
     latency = argv[optind++];
 
     bool listener = dirpath && *dirpath == '@';
+
+#ifdef UPIPE_HAVE_GCRYPT_H
+    gcry_check_version(NULL);
+    gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
+#endif
 
     /* setup environment */
 
@@ -252,6 +267,7 @@ int main(int argc, char *argv[])
     struct upipe *upipe_srt_handshake = upipe_void_alloc_output(upipe_udpsrc_srt, upipe_srt_handshake_mgr,
             uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt handshake"));
     upipe_set_option(upipe_srt_handshake, "listener", listener ? "1" : "0");
+    upipe_srt_handshake_set_password(upipe_srt_handshake, password);
 
     upipe_mgr_release(upipe_srt_handshake_mgr);
 
