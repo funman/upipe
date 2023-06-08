@@ -19,9 +19,10 @@
  */
 
 /** @file
- * @short Upipe module receiving rfc4585 feedback
+ * @short Upipe module for SRT senders
  */
 
+#include "upipe/config.h"
 #include "upipe/ubase.h"
 #include "upipe/uprobe.h"
 #include "upipe/uref.h"
@@ -48,6 +49,8 @@
 #include <limits.h>
 
 #include <bitstream/haivision/srt.h>
+
+#include <gcrypt.h>
 
 #define EXPECTED_FLOW_DEF "block."
 
@@ -96,6 +99,10 @@ struct upipe_srt_sender {
 
     /** buffer latency */
     uint64_t latency;
+
+    uint8_t salt[16];
+    uint8_t sek[2][32];
+    uint8_t sek_len;
 
     /** public upipe structure */
     struct upipe upipe;
@@ -422,6 +429,22 @@ static int upipe_srt_sender_input_set_flow_def(struct upipe *upipe, struct uref 
     if (ubase_check(uref_pic_get_number(flow_def, &isn)))
             upipe_srt_sender->seqnum = isn;
 
+    struct udict_opaque opaque;
+    if (ubase_check(uref_attr_get_opaque(flow_def, &opaque, UDICT_TYPE_OPAQUE, "enc.salt"))) {
+        if (opaque.size > 16)
+            opaque.size = 16;
+        memcpy(upipe_srt_sender->salt, opaque.v, opaque.size);
+    }
+
+#ifdef UPIPE_HAVE_GCRYPT_H
+    if (ubase_check(uref_attr_get_opaque(flow_def, &opaque, UDICT_TYPE_OPAQUE, "enc.even_key"))) {
+        if (opaque.size > sizeof(upipe_srt_sender->sek[0]))
+            opaque.size = sizeof(upipe_srt_sender->sek[0]);
+        upipe_srt_sender->sek_len = opaque.size;
+        memcpy(upipe_srt_sender->sek[0], opaque.v, opaque.size);
+    }
+#endif
+
     return uref_flow_match_def(flow_def, EXPECTED_FLOW_DEF);
 }
 
@@ -480,6 +503,15 @@ static struct upipe *upipe_srt_sender_alloc(struct upipe_mgr *mgr,
     if (unlikely(upipe == NULL))
         return NULL;
 
+#ifdef UPIPE_HAVE_GCRYPT_H
+    if (!gcry_control(GCRYCTL_INITIALIZATION_FINISHED_P)) {
+        uprobe_err(uprobe, upipe, "Application did not initialize libgcrypt, see "
+        "https://www.gnupg.org/documentation/manuals/gcrypt/Initializing-the-library.html");
+        upipe_srt_sender_free_void(upipe);
+        return NULL;
+    }
+#endif 
+
     struct upipe_srt_sender *upipe_srt_sender = upipe_srt_sender_from_upipe(upipe);
     upipe_srt_sender_init_urefcount(upipe);
     upipe_srt_sender_init_urefcount_real(upipe);
@@ -496,6 +528,8 @@ static struct upipe *upipe_srt_sender_alloc(struct upipe_mgr *mgr,
     upipe_srt_sender->socket_id = 0;
     upipe_srt_sender->seqnum = 0;
     upipe_srt_sender->syn_cookie = 1;
+
+    upipe_srt_sender->sek_len = 0;
 
     upipe_throw_ready(upipe);
     return upipe;
@@ -552,7 +586,52 @@ static inline void upipe_srt_sender_input(struct upipe *upipe, struct uref *uref
     srt_set_data_packet_position(buf, SRT_DATA_POSITION_ONLY);
     srt_set_data_packet_order(buf, true);
     srt_set_data_packet_retransmit(buf, false);
-    srt_set_data_packet_encryption(buf, SRT_DATA_ENCRYPTION_CLEAR);
+
+    if (upipe_srt_sender->sek_len) {
+        //
+        uint8_t *data;
+        int s = -1;
+        if (ubase_check(uref_block_write(uref, 0, &s, &data))) {
+            const uint8_t *salt = upipe_srt_sender->salt;
+            const uint8_t *sek = upipe_srt_sender->sek[0];
+            int key_len = upipe_srt_sender->sek_len;
+
+            uint8_t iv[16];
+            memset(&iv, 0, 16);
+            iv[10] = (seqnum >> 24) & 0xff;
+            iv[11] = (seqnum >> 16) & 0xff;
+            iv[12] = (seqnum >>  8) & 0xff;
+            iv[13] =  seqnum & 0xff;
+            for (int i = 0; i < 112/8; i++)
+                iv[i] ^= salt[i];
+
+            gcry_cipher_hd_t aes;
+            gpg_error_t err;
+            err = gcry_cipher_open(&aes, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_CTR, 0);
+            if (err) {
+                upipe_err_va(upipe, "Cipher open failed (0x%x)", err);
+                goto error;
+            }
+
+            err = gcry_cipher_setkey(aes, sek, key_len);
+            assert(!err);
+
+            err = gcry_cipher_setctr(aes, iv, 16);
+            assert(!err);
+
+            err = gcry_cipher_encrypt(aes, data, s, NULL, 0);
+            assert(!err);
+
+            gcry_cipher_close(aes);
+error:
+            uref_block_unmap(uref, 0);
+        }
+
+        //
+        srt_set_data_packet_encryption(buf, SRT_DATA_ENCRYPTION_EVEN);
+    } else {
+        srt_set_data_packet_encryption(buf, SRT_DATA_ENCRYPTION_CLEAR);
+    }
 
     ubuf_block_unmap(insert, 0);
     if (!ubase_check(uref_block_insert(uref, 0, insert))) {
