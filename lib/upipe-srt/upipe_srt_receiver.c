@@ -1012,14 +1012,24 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
             }
 
             err = gcry_cipher_setkey(aes, sek, key_len);
-            assert(!err);
+            if (err) {
+                upipe_err_va(upipe, "Couldn't set session key (0x%x)", err);
+                goto error_close;
+            }
 
             err = gcry_cipher_setctr(aes, iv, 16);
-            assert(!err);
+            if (err) {
+                upipe_err_va(upipe, "Couldn't set ctr (0x%x)", err);
+                goto error_close;
+            }
 
             err = gcry_cipher_encrypt(aes, buf, size, NULL, 0);
-            assert(!err);
+            if (err) {
+                upipe_err_va(upipe, "Couldn't decrypt packet (0x%x)", err);
+                goto error_close;
+            }
 
+error_close:
             gcry_cipher_close(aes);
 error:
             uref_block_unmap(uref, 0);
