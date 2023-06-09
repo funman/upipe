@@ -1119,6 +1119,7 @@ static struct uref *upipe_srt_handshake_input_control(struct upipe *upipe, const
     } else if (type == SRT_CONTROL_TYPE_ACK) {
         return upipe_srt_handshake_handle_ack(upipe, buf, size, now);
     } else if (type == SRT_CONTROL_TYPE_NAK) {
+        *handled = false;
     } else if (type == SRT_CONTROL_TYPE_ACKACK) {
     } else if (type == SRT_CONTROL_TYPE_SHUTDOWN) {
         exit(0);
