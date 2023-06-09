@@ -790,10 +790,16 @@ static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *
     }
 
     err = gcry_cipher_setkey(aes, kek, klen);
-    assert(!err);
+    if (err) {
+        upipe_err_va(upipe, "Couldn't use key encrypting key (0x%x)", err);
+        goto key_error;
+    }
 
     err = gcry_cipher_decrypt(aes, osek, 16, *wrap, *wrap_len);
-    assert(!err);
+    if (err) {
+        upipe_err_va(upipe, "Couldn't decrypt session key (0x%x)", err);
+        goto key_error;
+    }
 
     gcry_cipher_close(aes);
 
@@ -801,6 +807,13 @@ static bool upipe_srt_handshake_parse_kmreq(struct upipe *upipe, const uint8_t *
     memcpy(upipe_srt_handshake->sek[0], osek, klen);
 
     return true;
+
+key_error:
+    gcry_cipher_close(aes);
+    upipe_srt_handshake->sek_len = 0;
+    upipe_err(upipe, "Couldn't recover encryption key");
+
+    return false;
 #else
     upipe_err(upipe, "Encryption not built in");
     return false;
@@ -932,10 +945,18 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
             }
 
             err = gcry_cipher_setkey(aes, kek, klen);
-            assert(!err);
+            if (err) {
+                gcry_cipher_close(aes);
+                upipe_err_va(upipe, "Couldn't use key encrypting key (0x%x)", err);
+                return false;
+            }
 
             err = gcry_cipher_encrypt(aes, wrap, wrap_len, upipe_srt_handshake->sek[0], klen);
-            assert(!err);
+            if (err) {
+                gcry_cipher_close(aes);
+                upipe_err_va(upipe, "Couldn't encrypt session key (0x%x)", err);
+                return false;
+            }
 
             gcry_cipher_close(aes);
 
