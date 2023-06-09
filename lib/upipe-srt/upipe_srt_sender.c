@@ -614,17 +614,35 @@ static inline void upipe_srt_sender_input(struct upipe *upipe, struct uref *uref
             }
 
             err = gcry_cipher_setkey(aes, sek, key_len);
-            assert(!err);
+            if (err) {
+                upipe_err_va(upipe, "Couldn't set session key (0x%x)", err);
+                goto error_close;
+            }
 
             err = gcry_cipher_setctr(aes, iv, 16);
-            assert(!err);
+            if (err) {
+                upipe_err_va(upipe, "Couldn't set encryption ctr (0x%x)", err);
+                goto error_close;
+            }
 
             err = gcry_cipher_encrypt(aes, data, s, NULL, 0);
-            assert(!err);
+            if (err) {
+                upipe_err_va(upipe, "Couldn't encrypt packet (0x%x)", err);
+                goto error_close;
+            }
 
+error_close:
             gcry_cipher_close(aes);
 error:
             uref_block_unmap(uref, 0);
+
+            if (err) {
+                upipe_err(upipe, "Dropping packet");
+                ubuf_block_unmap(insert, 0);
+                ubuf_free(insert);
+                uref_free(uref);
+                return;
+            }
         }
 
         //
