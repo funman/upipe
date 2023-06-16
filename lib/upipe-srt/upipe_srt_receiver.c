@@ -360,14 +360,14 @@ static void upipe_srt_receiver_timer_lost(struct upump *upump)
             for (uint32_t seq = expected_seq; seq != seqnum; seq++) {
                 /* if packet was lost, we should have detected it already */
                 if (upipe_srt_receiver->last_nack[seq & 0xffff] == 0) {
-                    upipe_err_va(upipe, "packet %hu missing but was not marked as lost!", seq);
+                    upipe_err_va(upipe, "packet %u missing but was not marked as lost!", seq);
                     continue;
                 }
 
                 /* if we sent a NACK not too long ago, do not repeat it */
                 /* since NACKs are sent in a batch, break loop if the first packet is too early */
                 if (upipe_srt_receiver->last_nack[seq & 0xffff] > next_nack) {
-                    if (0) upipe_err_va(upipe, "Cancelling NACK due to RTT (seq %hu diff %"PRId64"",
+                    if (0) upipe_err_va(upipe, "Cancelling NACK due to RTT (seq %u diff %"PRId64"",
                         seq, next_nack - upipe_srt_receiver->last_nack[seq & 0xffff]
                     );
                     goto next;
@@ -523,7 +523,7 @@ static void upipe_srt_receiver_timer(struct upump *upump)
             uint32_t diff = seqnum - upipe_srt_receiver->last_output_seqnum - 1;
             if (diff) {
                 upipe_srt_receiver->loss += diff;
-                upipe_dbg_va(upipe, "PKT LOSS: %" PRIu64 " -> %"PRIu64" DIFF %hu",
+                upipe_dbg_va(upipe, "PKT LOSS: %" PRIu64 " -> %"PRIu64" DIFF %u",
                         upipe_srt_receiver->last_output_seqnum, seqnum, diff);
             }
         }
@@ -860,7 +860,7 @@ static bool upipe_srt_receiver_insert_inner(struct upipe *upipe, struct uref *ur
 
     uint32_t diff = seqnum - next_seqnum;
     if (!diff) {
-        upipe_verbose_va(upipe, "dropping duplicate %hu", seqnum);
+        upipe_verbose_va(upipe, "dropping duplicate %u", seqnum);
         upipe_srt_receiver->dups++;
         uref_free(uref);
         return true;
@@ -899,7 +899,7 @@ static bool upipe_srt_receiver_insert_inner(struct upipe *upipe, struct uref *ur
     upipe_srt_receiver->repaired++;
     upipe_srt_receiver->last_nack[seqnum & 0xffff] = 0;
 
-    upipe_verbose_va(upipe, "Repaired %"PRIu64" > %hu > %"PRIu64" -diff %d",
+    upipe_verbose_va(upipe, "Repaired %"PRIu64" > %u > %"PRIu64" -diff %d",
             prev_seqnum, seqnum, next_seqnum, -diff);
 
     return true;
@@ -1043,7 +1043,7 @@ error:
 
     uint32_t diff = seqnum - upipe_srt_receiver->expected_seqnum;
 
-    if (diff < 0x80000000) { // seqnum > last seq, insert at the end
+    if (diff < 0x80000000U) { // seqnum > last seq, insert at the end
         /* packet is from the future */
         upipe_srt_receiver->buffered++;
         ulist_add(&upipe_srt_receiver->queue, uref_to_uchain(uref));
@@ -1070,7 +1070,7 @@ error:
     uref_attr_get_priv(uref_from_uchain(upipe_srt_receiver->queue.next), &first_seq);
     uref_attr_get_priv(uref_from_uchain(upipe_srt_receiver->queue.prev), &last_seq);
     // XXX : when much too late, it could mean RTP source restart
-    upipe_err_va(upipe, "LATE packet %hu, dropped (buffered %"PRIu64" -> %"PRIu64")",
+    upipe_err_va(upipe, "LATE packet %u, dropped (buffered %"PRIu64" -> %"PRIu64")",
             seqnum, first_seq, last_seq);
 }
 
