@@ -232,7 +232,7 @@ static void upipe_srt_sender_lost_sub_n(struct upipe *upipe, uint32_t seq, uint3
             continue;
         }
 
-        upipe_verbose_va(upipe, "Retransmit %hu", seq);
+        upipe_verbose_va(upipe, "Retransmit %" PRIu64, uref_seqnum);
 
         uint8_t *buf;
         int s = 0;
@@ -664,7 +664,7 @@ error:
     /* Output packet immediately */
     upipe_srt_sender_output(upipe, uref_dup(uref), upump_p);
 
-    upipe_verbose_va(upipe, "Output & buffer %hu", seqnum);
+    upipe_verbose_va(upipe, "Output & buffer %u", seqnum);
 
     /* Buffer packet in case retransmission is needed */
     ulist_add(&upipe_srt_sender->queue, uref_to_uchain(uref));
