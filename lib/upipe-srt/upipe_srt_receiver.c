@@ -410,10 +410,10 @@ static void upipe_srt_receiver_timer_lost(struct upump *upump)
                 cif[1] = (expected_seq >> 16) & 0xff;
                 cif[2] = (expected_seq >>  8) & 0xff;
                 cif[3] = (expected_seq      ) & 0xff;
-                cif[4] = (seqnum >> 24) & 0x7f;
-                cif[5] = (seqnum >> 16) & 0xff;
-                cif[6] = (seqnum >>  8) & 0xff;
-                cif[7] = (seqnum      ) & 0xff;
+                cif[4] = ((seqnum - 1) >> 24) & 0x7f;
+                cif[5] = ((seqnum - 1) >> 16) & 0xff;
+                cif[6] = ((seqnum - 1) >>  8) & 0xff;
+                cif[7] = ((seqnum - 1)      ) & 0xff;
                 s -= 8;
                 cif += 8;
             } else {
