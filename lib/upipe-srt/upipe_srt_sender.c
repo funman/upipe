@@ -223,7 +223,7 @@ static void upipe_srt_sender_lost_sub_n(struct upipe *upipe, uint32_t seq, uint3
         uref_attr_get_priv(uref, &uref_seqnum);
 
         uint32_t diff = uref_seqnum - seq;
-        if (diff > pkts) {
+        if (diff >= pkts) {
             /* packet not in range */
             if (diff < 0x80000000) {
                 /* packet after range */
