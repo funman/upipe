@@ -245,44 +245,6 @@ static void upipe_srt_sender_lost_sub_n(struct upipe *upipe, uint32_t seq, uint3
     }
 }
 
-#if 0
-/** @internal
- */
-static void upipe_srt_sender_lost_sub(struct upipe *upipe, uint32_t seq)
-{
-    struct upipe *upipe_super = NULL;
-    upipe_srt_sender_input_get_super(upipe, &upipe_super);
-    struct upipe_srt_sender *upipe_srt_sender = upipe_srt_sender_from_upipe(upipe_super);
-
-    struct uchain *uchain;
-    ulist_foreach(&upipe_srt_sender->queue, uchain) {
-        struct uref *uref = uref_from_uchain(uchain);
-        uint64_t uref_seqnum = 0;
-        uref_attr_get_priv(uref, &uref_seqnum);
-
-        if (seq != uref_seqnum)
-            continue;
-
-        upipe_verbose_va(upipe, "Retransmit %hu", seq);
-
-        uint8_t *buf;
-        int s = 0;
-        if (ubase_check(uref_block_write(uref, 0, &s, &buf))) {
-            //uint8_t ssrc[4];
-            //rtp_get_ssrc(buf, ssrc);
-            //ssrc[3] |= 1; /* RIST retransmitted packet */
-            //rtp_set_ssrc(buf, ssrc);
-            uref_block_unmap(uref, 0);
-        }
-
-        upipe_srt_sender_output(upipe_super, uref_dup(uref), NULL);
-    }
-
-    upipe_warn_va(upipe, "Couldn't find seq %hu", seq);
-}
-
-#endif
-
 /** @This is called when there is no external reference to the pipe anymore.
  *
  * @param upipe description structure of the pipe
