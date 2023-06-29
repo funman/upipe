@@ -897,6 +897,7 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
         size -= ext_size;
         out_ext += ext_size;
 
+#ifdef UPIPE_HAVE_GCRYPT_H
         if (upipe_srt_handshake->password) {
             srt_set_handshake_extension_type(out_ext, SRT_HANDSHAKE_EXT_TYPE_KMREQ);
             srt_set_handshake_extension_len(out_ext, (size - SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE) / 4);
@@ -962,6 +963,7 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
 
             memcpy(&out_ext[SRT_KMREQ_COMMON_SIZE], wrap, wrap_len);
         }
+#endif
 
         upipe_srt_handshake->expect_conclusion = true;
 

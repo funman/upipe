@@ -140,7 +140,6 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
 
         return UBASE_ERR_NONE;
     }
-    default:
     }
     return uprobe_throw_next(uprobe, upipe, event, args);
 }

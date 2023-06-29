@@ -549,6 +549,7 @@ static inline void upipe_srt_sender_input(struct upipe *upipe, struct uref *uref
     srt_set_data_packet_order(buf, true);
     srt_set_data_packet_retransmit(buf, false);
 
+#ifdef UPIPE_HAVE_GCRYPT_H
     if (upipe_srt_sender->sek_len) {
         //
         uint8_t *data;
@@ -609,9 +610,9 @@ error:
 
         //
         srt_set_data_packet_encryption(buf, SRT_DATA_ENCRYPTION_EVEN);
-    } else {
+    } else
+#endif
         srt_set_data_packet_encryption(buf, SRT_DATA_ENCRYPTION_CLEAR);
-    }
 
     ubuf_block_unmap(insert, 0);
     if (!ubase_check(uref_block_insert(uref, 0, insert))) {
