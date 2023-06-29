@@ -1033,8 +1033,8 @@ error_close:
             gcry_cipher_close(aes);
 error:
             uref_block_unmap(uref, 0);
-        }
 #endif
+        }
     }
 
     /* first packet */
