@@ -943,6 +943,13 @@ static void upipe_srt_receiver_input(struct upipe *upipe, struct uref *uref,
     }
 
     if (srt_get_packet_control(buf)) {
+        if (srt_get_control_packet_type(buf) == SRT_CONTROL_TYPE_ACKACK)  {
+            uint32_t ack_num = srt_get_control_packet_type_specific(buf);
+            (void)ack_num; // TODO: check ack_num ? keep a rotating list of acks ?
+            uint64_t now = uclock_now(upipe_srt_receiver->uclock);
+            upipe_srt_receiver->rtt = now - upipe_srt_receiver->last_ack;
+        }
+
         ubase_assert(uref_block_unmap(uref, 0));
         uref_free(uref);
         return;
