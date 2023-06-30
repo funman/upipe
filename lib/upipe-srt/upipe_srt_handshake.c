@@ -851,7 +851,6 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
 
         /* */
         if (version != SRT_HANDSHAKE_VERSION || dst_socket_id != upipe_srt_handshake->socket_id
-                || encryption != SRT_HANDSHAKE_CIPHER_NONE
                 || hs_type != SRT_HANDSHAKE_TYPE_INDUCTION
            ) {
             upipe_err_va(upipe, "Malformed handshake (%08x != %08x)",
