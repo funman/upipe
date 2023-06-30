@@ -469,6 +469,7 @@ next:
                 srt_set_ack_receiving_rate(out_cif, 100000);
 
                 uref_block_unmap(uref, 0);
+                upipe_srt_receiver->last_ack = now;
                 upipe_srt_receiver_output_output(upipe_srt_receiver->control, uref, NULL);
             }
         }
