@@ -98,6 +98,8 @@ static enum uprobe_log_level loglevel = UPROBE_LOG_DEBUG;
 static struct uprobe uprobe_udp_srt;
 static struct uprobe *logger;
 
+static bool restart;
+
 static void addr_to_str(const struct sockaddr *s, char uri[INET6_ADDRSTRLEN+6])
 {
     uint16_t port = 0;
@@ -131,6 +133,7 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
     switch (event) {
     case UPROBE_SOURCE_END:
         upipe_warn(upipe, "Remote end not listening, can't receive SRT");
+        restart = true;
         struct upump *u = upump_alloc_timer(upump_mgr, stop, upipe_udpsrc,
                 NULL, UCLOCK_FREQ, 0);
         upump_start(u);
@@ -259,8 +262,23 @@ static void stop(struct upump *upump)
     upipe_release(upipe_udpsrc);
     upipe_release(upipe_srt_handshake_sub);
 
-    start();
+    if (restart) {
+        restart = false;
+        start();
+    }
 }
+
+static void sig_cb(struct upump *upump)
+{
+    static int done = false;
+
+    if (done)
+        abort();
+    done = true;
+
+    stop(NULL);
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -333,8 +351,16 @@ int main(int argc, char *argv[])
         upump_start(u);
     }
 
+    struct upump *sigint_pump =
+        upump_alloc_signal(upump_mgr, sig_cb,
+                           (void *)SIGINT, NULL, SIGINT);
+    upump_set_status(sigint_pump, false);
+    upump_start(sigint_pump);
+
     /* fire loop ! */
     upump_mgr_run(upump_mgr, NULL);
+
+    upump_free(sigint_pump);
 
     /* should never be here for the moment. todo: sighandler.
      * release everything */

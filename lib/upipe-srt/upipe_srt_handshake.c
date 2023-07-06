@@ -275,6 +275,35 @@ static struct upipe *upipe_srt_handshake_output_alloc(struct upipe_mgr *mgr,
     return upipe;
 }
 
+static void upipe_srt_handshake_output_shutdown(struct upipe *upipe)
+{
+    struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_sub_mgr(upipe->mgr);
+
+    uint64_t now = uclock_now(upipe_srt_handshake->uclock);
+    uint32_t timestamp = (now - upipe_srt_handshake->establish_time) / 27;
+
+    struct uref *uref = uref_block_alloc(upipe_srt_handshake->uref_mgr,
+            upipe_srt_handshake->ubuf_mgr, SRT_HEADER_SIZE);
+    if (!uref)
+        return;
+    uint8_t *out;
+    int output_size = -1;
+    if (unlikely(!ubase_check(uref_block_write(uref, 0, &output_size, &out)))) {
+        uref_free(uref);
+        upipe_throw_fatal(upipe, UBASE_ERR_ALLOC);
+    }
+
+    srt_set_packet_control(out, true);
+    srt_set_packet_timestamp(out, timestamp);
+    srt_set_packet_dst_socket_id(out, upipe_srt_handshake->remote_socket_id);
+    srt_set_control_packet_type(out, SRT_CONTROL_TYPE_SHUTDOWN);
+    srt_set_control_packet_subtype(out, 0);
+
+    uref_block_unmap(uref, 0);
+    upipe_srt_handshake_output_output(upipe, uref,
+            &upipe_srt_handshake->upump_timer);
+}
+
 
 /** @This frees a upipe.
  *
@@ -282,6 +311,7 @@ static struct upipe *upipe_srt_handshake_output_alloc(struct upipe_mgr *mgr,
  */
 static void upipe_srt_handshake_output_free(struct upipe *upipe)
 {
+    upipe_srt_handshake_output_shutdown(upipe);
     upipe_throw_dead(upipe);
 
     struct upipe_srt_handshake *upipe_srt_handshake = upipe_srt_handshake_from_sub_mgr(upipe->mgr);
