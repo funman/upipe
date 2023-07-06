@@ -80,9 +80,23 @@ static void usage(const char *argv0) {
 
 static struct upipe *upipe_udpsink;
 static struct upipe *upipe_udpsrc_srt;
+static struct upipe *upipe_udpsrc;
 static struct upipe *upipe_srt_handshake_sub;
+static struct upipe *upipe_srt_sender;
+static struct upipe *upipe_srt_sender_sub;
 
+static struct upump_mgr *upump_mgr;
 static struct uref_mgr *uref_mgr;
+
+static char *srcpath;
+static char *dirpath;
+static char *latency;
+static char *password;
+
+static enum uprobe_log_level loglevel = UPROBE_LOG_DEBUG;
+
+static struct uprobe uprobe_udp_srt;
+static struct uprobe *logger;
 
 static void addr_to_str(const struct sockaddr *s, char uri[INET6_ADDRSTRLEN+6])
 {
@@ -108,18 +122,19 @@ static void addr_to_str(const struct sockaddr *s, char uri[INET6_ADDRSTRLEN+6])
     sprintf(&uri[uri_len], ":%hu", port);
 }
 
+static void stop(struct upump *upump);
+
 /** definition of our uprobe */
 static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
                  int event, va_list args)
 {
-    const char *uri;
-
     switch (event) {
     case UPROBE_SOURCE_END:
         upipe_warn(upipe, "Remote end not listening, can't receive SRT");
-        /* This control can not fail, and will trigger restart of upump */
-        upipe_get_uri(upipe, &uri);
-        return UBASE_ERR_NONE;
+        struct upump *u = upump_alloc_timer(upump_mgr, stop, upipe_udpsrc,
+                NULL, UCLOCK_FREQ, 0);
+        upump_start(u);
+        return uprobe_throw_next(uprobe, upipe, event, args);
     case UPROBE_UDPSRC_NEW_PEER: {
         int udp_fd;
         int sig = va_arg(args, int);
@@ -144,102 +159,13 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
     return uprobe_throw_next(uprobe, upipe, event, args);
 }
 
-/** definition of our uprobe */
-static int catch(struct uprobe *uprobe, struct upipe *upipe,
-                 int event, va_list args)
+static int start(void)
 {
-    switch (event) {
-    case UPROBE_SOURCE_END:
-        upipe_release(upipe);
-        break;
-
-    default:
-        return uprobe_throw_next(uprobe, upipe, event, args);
-    }
-    return UBASE_ERR_NONE;
-}
-
-static void stop(struct upump *upump)
-{
-    struct upipe *udpsrc = upump_get_opaque(upump, struct upipe*);
-    upump_stop(upump);
-    upump_free(upump);
-
-    upipe_release(upipe_udpsrc_srt);
-    upipe_release(udpsrc);
-    upipe_release(upipe_srt_handshake_sub);
-}
-
-int main(int argc, char *argv[])
-{
-    char *srcpath, *dirpath, *latency;
-    char *password = NULL;
-    int opt;
-    enum uprobe_log_level loglevel = UPROBE_LOG_DEBUG;
-
-    /* parse options */
-    while ((opt = getopt(argc, argv, "qdk:")) != -1) {
-        switch (opt) {
-            case 'q':
-                loglevel++;
-                break;
-            case 'd':
-                loglevel--;
-                break;
-                 break;
-            case 'k':
-                password = optarg;
-                break;
-            default:
-                usage(argv[0]);
-        }
-    }
-    if (argc - optind < 3) {
-        usage(argv[0]);
-    }
-    srcpath = argv[optind++];
-    dirpath = argv[optind++];
-    latency = argv[optind++];
-
     bool listener = dirpath && *dirpath == '@';
-
-#ifdef UPIPE_HAVE_GCRYPT_H
-    gcry_check_version(NULL);
-    gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
-#endif
-
-    /* setup environment */
-
-    struct umem_mgr *umem_mgr = umem_alloc_mgr_alloc();
-    struct udict_mgr *udict_mgr = udict_inline_mgr_alloc(UDICT_POOL_DEPTH,
-                                                         umem_mgr, -1, -1);
-    uref_mgr = uref_std_mgr_alloc(UREF_POOL_DEPTH, udict_mgr,
-                                                   0);
-    struct upump_mgr *upump_mgr = upump_ev_mgr_alloc_default(UPUMP_POOL,
-                                                     UPUMP_BLOCKER_POOL);
-    struct uclock *uclock = uclock_std_alloc(UCLOCK_FLAG_REALTIME);
-    struct uprobe uprobe;
-    uprobe_init(&uprobe, catch, NULL);
-    struct uprobe *logger = uprobe_stdio_alloc(&uprobe, stdout, loglevel);
-    assert(logger != NULL);
-    struct uprobe *uprobe_dejitter = uprobe_dejitter_alloc(logger, true, 0);
-    assert(uprobe_dejitter != NULL);
-
-    logger = uprobe_uref_mgr_alloc(uprobe_dejitter, uref_mgr);
-
-    assert(logger != NULL);
-    logger = uprobe_upump_mgr_alloc(logger, upump_mgr);
-    assert(logger != NULL);
-    logger = uprobe_ubuf_mem_alloc(logger, umem_mgr, UBUF_POOL_DEPTH,
-                                   UBUF_POOL_DEPTH);
-    assert(logger != NULL);
-
-    logger = uprobe_uclock_alloc(logger, uclock);
-    assert(logger != NULL);
 
     /* rtp source */
     struct upipe_mgr *upipe_udpsrc_mgr = upipe_udpsrc_mgr_alloc();
-    struct upipe *upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr,
+    upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr,
             uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp source data"));
 
     if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath))) {
@@ -249,14 +175,13 @@ int main(int argc, char *argv[])
 
     /* send through srt sender */
     struct upipe_mgr *upipe_srt_sender_mgr = upipe_srt_sender_mgr_alloc();
-    struct upipe *upipe_srt_sender = upipe_void_alloc_output(upipe_udpsrc, upipe_srt_sender_mgr,
+    upipe_srt_sender = upipe_void_alloc_output(upipe_udpsrc, upipe_srt_sender_mgr,
             uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt sender"));
     upipe_mgr_release(upipe_srt_sender_mgr);
 
     if (!ubase_check(upipe_set_option(upipe_srt_sender, "latency", latency)))
         return EXIT_FAILURE;
 
-    struct uprobe uprobe_udp_srt;
     uprobe_init(&uprobe_udp_srt, catch_udp, uprobe_use(logger));
     upipe_udpsrc_srt = upipe_void_alloc(upipe_udpsrc_mgr,
             uprobe_pfx_alloc(&uprobe_udp_srt, loglevel, "udp source srt"));
@@ -276,7 +201,7 @@ int main(int argc, char *argv[])
         uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt handshake sub"));
     assert(upipe_srt_handshake_sub);
 
-    struct upipe *upipe_srt_sender_sub = upipe_void_chain_output_sub(upipe_srt_handshake,
+    upipe_srt_sender_sub = upipe_void_chain_output_sub(upipe_srt_handshake,
         upipe_srt_sender,
         uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srt sender sub"));
     assert(upipe_srt_sender_sub);
@@ -320,6 +245,87 @@ int main(int argc, char *argv[])
         upipe_srt_handshake_set_peer(upipe_srt_handshake, peer, peer_len);
     }
 
+    return 0;
+}
+
+static void stop(struct upump *upump)
+{
+    if (upump) {
+        upump_stop(upump);
+        upump_free(upump);
+    }
+
+    upipe_release(upipe_udpsrc_srt);
+    upipe_release(upipe_udpsrc);
+    upipe_release(upipe_srt_handshake_sub);
+
+    start();
+}
+
+int main(int argc, char *argv[])
+{
+    int opt;
+
+    /* parse options */
+    while ((opt = getopt(argc, argv, "qdk:")) != -1) {
+        switch (opt) {
+            case 'q':
+                loglevel++;
+                break;
+            case 'd':
+                loglevel--;
+                break;
+                 break;
+            case 'k':
+                password = optarg;
+                break;
+            default:
+                usage(argv[0]);
+        }
+    }
+    if (argc - optind < 3) {
+        usage(argv[0]);
+    }
+    srcpath = argv[optind++];
+    dirpath = argv[optind++];
+    latency = argv[optind++];
+
+#ifdef UPIPE_HAVE_GCRYPT_H
+    gcry_check_version(NULL);
+    gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
+#endif
+
+    /* setup environment */
+
+    struct umem_mgr *umem_mgr = umem_alloc_mgr_alloc();
+    struct udict_mgr *udict_mgr = udict_inline_mgr_alloc(UDICT_POOL_DEPTH,
+                                                         umem_mgr, -1, -1);
+    uref_mgr = uref_std_mgr_alloc(UREF_POOL_DEPTH, udict_mgr,
+                                                   0);
+    upump_mgr = upump_ev_mgr_alloc_default(UPUMP_POOL,
+                                                     UPUMP_BLOCKER_POOL);
+    struct uclock *uclock = uclock_std_alloc(UCLOCK_FLAG_REALTIME);
+    logger = uprobe_stdio_alloc(NULL, stdout, loglevel);
+    assert(logger != NULL);
+    struct uprobe *uprobe_dejitter = uprobe_dejitter_alloc(logger, true, 0);
+    assert(uprobe_dejitter != NULL);
+
+    logger = uprobe_uref_mgr_alloc(uprobe_dejitter, uref_mgr);
+
+    assert(logger != NULL);
+    logger = uprobe_upump_mgr_alloc(logger, upump_mgr);
+    assert(logger != NULL);
+    logger = uprobe_ubuf_mem_alloc(logger, umem_mgr, UBUF_POOL_DEPTH,
+                                   UBUF_POOL_DEPTH);
+    assert(logger != NULL);
+
+    logger = uprobe_uclock_alloc(logger, uclock);
+    assert(logger != NULL);
+
+    int ret = start();
+    if (ret)
+        return ret;
+
     if (0) {
         upipe_dump_open(NULL, NULL, "dump.dot", NULL, upipe_udpsink, upipe_udpsrc, upipe_udpsrc_srt, NULL);
         struct upump *u = upump_alloc_timer(upump_mgr, stop, upipe_udpsrc,
@@ -333,7 +339,6 @@ int main(int argc, char *argv[])
     /* should never be here for the moment. todo: sighandler.
      * release everything */
     uprobe_release(logger);
-    uprobe_clean(&uprobe);
     uprobe_clean(&uprobe_udp_srt);
 
     upump_mgr_release(upump_mgr);
