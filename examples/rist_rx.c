@@ -74,6 +74,18 @@ static struct upump_mgr *upump_mgr;
 
 static struct upipe *upipe_udpsrc;
 static struct upipe *upipe_udp_sink;
+static struct upipe *upipe_srth_sub;
+static struct upipe *upipe_srtr_sub;
+
+static struct uprobe uprobe_udp;
+static struct uprobe uprobe_srt;
+static struct uprobe *logger;
+
+static char *dirpath;
+static char *srcpath;
+static char *password;
+
+static bool restart;
 
 static void addr_to_str(const struct sockaddr *s, char uri[INET6_ADDRSTRLEN+6])
 {
@@ -97,6 +109,104 @@ static void addr_to_str(const struct sockaddr *s, char uri[INET6_ADDRSTRLEN+6])
 
     size_t uri_len = strlen(uri);
     sprintf(&uri[uri_len], ":%hu", port);
+}
+
+static int start(void)
+{
+    bool listener = srcpath && *srcpath == '@';
+    struct upipe_mgr *upipe_udpsrc_mgr = upipe_udpsrc_mgr_alloc();
+    upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr, &uprobe_udp);
+    upipe_mgr_release(upipe_udpsrc_mgr);
+
+    struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc();
+    struct upipe *upipe_srth = upipe_void_alloc_output(upipe_udpsrc,
+            upipe_srt_handshake_mgr, &uprobe_srt);
+    assert(upipe_srth);
+    upipe_set_option(upipe_srth, "listener", listener ? "1" : "0");
+    upipe_srt_handshake_set_password(upipe_srth, password);
+    upipe_mgr_release(upipe_srt_handshake_mgr);
+
+    upipe_srth_sub = upipe_void_alloc_sub(upipe_srth,
+            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srth_sub"));
+    assert(upipe_srth_sub);
+    upipe_udp_sink = upipe_void_alloc_output(upipe_srth_sub,
+            udp_sink_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel,
+                "udpsink"));
+    upipe_release(upipe_udp_sink);
+
+    struct upipe_mgr *upipe_srt_receiver_mgr = upipe_srt_receiver_mgr_alloc();
+    struct upipe *upipe_srtr = upipe_void_chain_output(upipe_srth,
+            upipe_srt_receiver_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srtr"));
+    assert(upipe_srtr);
+    upipe_mgr_release(upipe_srt_receiver_mgr);
+
+    upipe_srtr_sub = upipe_void_alloc_sub(upipe_srtr,
+            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srtr_sub"));
+    assert(upipe_srtr_sub);
+    upipe_set_output(upipe_srtr_sub, upipe_udp_sink);
+
+    int udp_fd;
+    /* receive SRT */
+    if (listener) {
+        if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath)))
+            return EXIT_FAILURE;
+        ubase_assert(upipe_udpsrc_get_fd(upipe_udpsrc, &udp_fd));
+
+    } else {
+        if (!ubase_check(upipe_set_uri(upipe_udp_sink, srcpath)))
+            return EXIT_FAILURE;
+
+        ubase_assert(upipe_udpsink_get_fd(upipe_udp_sink, &udp_fd));
+        ubase_assert(upipe_udpsrc_set_fd(upipe_udpsrc, dup(udp_fd)));
+    }
+
+    struct sockaddr_storage ad;
+    socklen_t peer_len = sizeof(ad);
+    struct sockaddr *peer = (struct sockaddr*) &ad;
+
+    if (!getsockname(udp_fd, peer, &peer_len)) {
+        char uri[INET6_ADDRSTRLEN+6];
+        addr_to_str(peer, uri);
+        upipe_warn_va(upipe_srth, "Local %s", uri); // XXX: INADDR_ANY when listening
+        upipe_srt_handshake_set_peer(upipe_srth, peer, peer_len);
+    }
+
+    upipe_attach_uclock(upipe_udpsrc);
+    struct upipe *upipe_udp_sink_data = upipe_void_chain_output(upipe_srtr,
+            udp_sink_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel,
+                "udpsink data"));
+    upipe_set_uri(upipe_udp_sink_data, dirpath);
+    upipe_release(upipe_udp_sink_data);
+
+    return 0;
+}
+
+static void stop(struct upump *upump)
+{
+    upump_stop(upump);
+    upump_free(upump);
+
+    upipe_release(upipe_srth_sub);
+    upipe_release(upipe_srtr_sub);
+    upipe_release(upipe_udpsrc);
+
+    if (restart) {
+        restart = false;
+        start();
+    }
+}
+
+static int catch_srt(struct uprobe *uprobe, struct upipe *upipe,
+                 int event, va_list args)
+{
+    if (event == UPROBE_SOURCE_END) {
+        restart = true;
+        struct upump *u = upump_alloc_timer(upump_mgr, stop, NULL, NULL, 0, 0);
+        upump_start(u);
+        return UBASE_ERR_NONE;
+    }
+
+    return uprobe_throw_next(uprobe, upipe, event, args);
 }
 
 static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
@@ -139,18 +249,8 @@ static void usage(const char *argv0) {
     exit(EXIT_FAILURE);
 }
 
-static void stop(struct upump *upump)
-{
-    upump_stop(upump);
-    upump_free(upump);
-
-    upipe_release(upipe_udpsrc);
-}
-
 int main(int argc, char *argv[])
 {
-    char *dirpath, *srcpath;
-    char *password = NULL;
     int opt;
 
     /* parse options */
@@ -189,7 +289,7 @@ int main(int argc, char *argv[])
                                                    0);
     upump_mgr = upump_ev_mgr_alloc_default(UPUMP_POOL,
                                                      UPUMP_BLOCKER_POOL);
-    struct uprobe *logger = uprobe_stdio_alloc(NULL, stdout, loglevel);
+    logger = uprobe_stdio_alloc(NULL, stdout, loglevel);
     assert(logger != NULL);
     struct uprobe *uprobe_dejitter = uprobe_dejitter_alloc(logger, true, 0);
     assert(uprobe_dejitter != NULL);
@@ -211,75 +311,12 @@ int main(int argc, char *argv[])
     logger = uprobe_uclock_alloc(logger, uclock);
     assert(logger != NULL);
 
-    bool listener = srcpath && *srcpath == '@';
-
-    /* srt source */
-    struct uprobe uprobe_udp;
     uprobe_init(&uprobe_udp, catch_udp, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "udp source"));
+    uprobe_init(&uprobe_srt, catch_srt, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srth"));
 
-    struct upipe_mgr *upipe_udpsrc_mgr = upipe_udpsrc_mgr_alloc();
-    upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr, &uprobe_udp);
-    upipe_mgr_release(upipe_udpsrc_mgr);
-
-    struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc();
-    struct upipe *upipe_srth = upipe_void_alloc_output(upipe_udpsrc,
-            upipe_srt_handshake_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srth"));
-    assert(upipe_srth);
-    upipe_set_option(upipe_srth, "listener", listener ? "1" : "0");
-    upipe_srt_handshake_set_password(upipe_srth, password);
-    upipe_mgr_release(upipe_srt_handshake_mgr);
-
-    struct upipe *upipe_srth_sub = upipe_void_alloc_sub(upipe_srth,
-            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srth_sub"));
-    assert(upipe_srth_sub);
-    upipe_udp_sink = upipe_void_alloc_output(upipe_srth_sub,
-            udp_sink_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel,
-                "udpsink"));
-    upipe_release(upipe_udp_sink);
-
-    struct upipe_mgr *upipe_srt_receiver_mgr = upipe_srt_receiver_mgr_alloc();
-    struct upipe *upipe_srtr = upipe_void_chain_output(upipe_srth,
-            upipe_srt_receiver_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srtr"));
-    assert(upipe_srtr);
-    upipe_mgr_release(upipe_srt_receiver_mgr);
-
-    struct upipe *upipe_srtr_sub = upipe_void_alloc_sub(upipe_srtr,
-            uprobe_pfx_alloc(uprobe_use(logger), loglevel, "srtr_sub"));
-    assert(upipe_srtr_sub);
-    upipe_set_output(upipe_srtr_sub, upipe_udp_sink);
-
-    int udp_fd;
-    /* receive SRT */
-    if (listener) {
-        if (!ubase_check(upipe_set_uri(upipe_udpsrc, srcpath)))
-            return EXIT_FAILURE;
-        ubase_assert(upipe_udpsrc_get_fd(upipe_udpsrc, &udp_fd));
-
-    } else {
-        if (!ubase_check(upipe_set_uri(upipe_udp_sink, srcpath)))
-            return EXIT_FAILURE;
-
-        ubase_assert(upipe_udpsink_get_fd(upipe_udp_sink, &udp_fd));
-        ubase_assert(upipe_udpsrc_set_fd(upipe_udpsrc, dup(udp_fd)));
-    }
-
-    struct sockaddr_storage ad;
-    socklen_t peer_len = sizeof(ad);
-    struct sockaddr *peer = (struct sockaddr*) &ad;
-
-    if (!getsockname(udp_fd, peer, &peer_len)) {
-        char uri[INET6_ADDRSTRLEN+6];
-        addr_to_str(peer, uri);
-        upipe_warn_va(upipe_srth, "Local %s", uri); // XXX: INADDR_ANY when listening
-        upipe_srt_handshake_set_peer(upipe_srth, peer, peer_len);
-    }
-
-    upipe_attach_uclock(upipe_udpsrc);
-    struct upipe *upipe_udp_sink_data = upipe_void_chain_output(upipe_srtr,
-            udp_sink_mgr, uprobe_pfx_alloc(uprobe_use(logger), loglevel,
-                "udpsink data"));
-    upipe_set_uri(upipe_udp_sink_data, dirpath);
-    upipe_release(upipe_udp_sink_data);
+    int ret = start();
+    if (ret)
+        return ret;
 
     if (0) {
         struct upump *u = upump_alloc_timer(upump_mgr, stop, NULL, NULL,
@@ -292,6 +329,7 @@ int main(int argc, char *argv[])
 
     /* should never be here for the moment. todo: sighandler.
      * release everything */
+    uprobe_clean(&uprobe_srt);
     uprobe_clean(&uprobe_udp);
     uprobe_release(logger);
 
