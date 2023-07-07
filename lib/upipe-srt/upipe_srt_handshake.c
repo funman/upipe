@@ -1025,7 +1025,7 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
         uref_block_unmap(uref, 0);
         return uref;
     } else {
-        if (version != SRT_HANDSHAKE_VERSION || encryption != SRT_HANDSHAKE_CIPHER_NONE
+        if (version != SRT_HANDSHAKE_VERSION
                 || hs_type != SRT_HANDSHAKE_TYPE_CONCLUSION
                 || syn_cookie != upipe_srt_handshake->syn_cookie
                 || dst_socket_id != 0) {
