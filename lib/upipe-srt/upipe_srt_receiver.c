@@ -768,6 +768,15 @@ static int upipe_srt_receiver_set_flow_def(struct upipe *upipe, struct uref *flo
 {
     struct upipe_srt_receiver *upipe_srt_receiver = upipe_srt_receiver_from_upipe(upipe);
 
+    /* empty buffer */
+    upipe_warn(upipe, "Emptying buffer");
+    upipe_srt_receiver->expected_seqnum = UINT_MAX;
+    upipe_srt_receiver->last_output_seqnum = UINT64_MAX;
+    struct uchain *uchain, *uchain_tmp;
+    ulist_delete_foreach(&upipe_srt_receiver->queue, uchain, uchain_tmp) {
+        ulist_delete(uchain);
+    }
+
     if (flow_def == NULL)
         return UBASE_ERR_INVALID;
 
