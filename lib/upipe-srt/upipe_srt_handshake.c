@@ -1037,7 +1037,7 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
         /* At least HSREQ is expected */
         size -= SRT_HEADER_SIZE + SRT_HANDSHAKE_CIF_SIZE;
         if (size < SRT_HANDSHAKE_CIF_EXTENSION_MIN_SIZE + SRT_HANDSHAKE_HSREQ_SIZE) {
-            upipe_err(upipe, "Malformed conclusion handshake");
+            upipe_err(upipe, "Malformed conclusion handshake (size)");
             upipe_srt_handshake->expect_conclusion = false;
             return NULL;
         }
