@@ -509,8 +509,8 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     upipe_srt_handshake_init_uclock(upipe);
     upipe_srt_handshake_require_uclock(upipe);
 
-    upipe_srt_handshake->socket_id = 77; // TODO: random?
-    upipe_srt_handshake->syn_cookie = 0; // TODO
+    srand48((long)&uprobe); // FIXME
+    upipe_srt_handshake->syn_cookie = mrand48();
     upipe_srt_handshake->isn = 0;
     upipe_srt_handshake->remote_socket_id = 0; // will be set with remote first packet
     upipe_srt_handshake->mtu = 1500;
@@ -571,6 +571,7 @@ static int upipe_srt_handshake_check(struct upipe *upipe, struct uref *flow_form
     }
 
     if (upipe_srt_handshake->upump_mgr && !upipe_srt_handshake->upump_timer && !upipe_srt_handshake->listener) {
+        upipe_srt_handshake->socket_id = mrand48();
         struct upump *upump =
             upump_alloc_timer(upipe_srt_handshake->upump_mgr,
                               upipe_srt_handshake_timer,
@@ -1012,6 +1013,7 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
         upipe_srt_handshake->establish_time = now;
         timestamp = 0;
         upipe_srt_handshake->remote_socket_id = srt_get_handshake_socket_id(cif);
+        upipe_srt_handshake->socket_id = mrand48();
 
         struct uref *uref = upipe_srt_handshake_alloc_hs(upipe, 0, timestamp, &out_cif);
         if (!uref)
@@ -1200,6 +1202,15 @@ static void upipe_srt_handshake_input(struct upipe *upipe, struct uref *uref,
 
     if (size < SRT_HEADER_SIZE) {
         upipe_err_va(upipe, "Packet too small (%d)", size);
+        ubase_assert(uref_block_unmap(uref, 0));
+        uref_free(uref);
+        return;
+    }
+
+    uint32_t dst_socket_id = srt_get_packet_dst_socket_id(buf);
+    if (dst_socket_id && dst_socket_id != upipe_srt_handshake->socket_id) {
+        upipe_err_va(upipe, "0x%08x != 0x%08x", dst_socket_id,
+            upipe_srt_handshake->socket_id);
         ubase_assert(uref_block_unmap(uref, 0));
         uref_free(uref);
         return;
