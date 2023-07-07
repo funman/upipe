@@ -510,7 +510,6 @@ static struct upipe *upipe_srt_handshake_alloc(struct upipe_mgr *mgr,
     upipe_srt_handshake_require_uclock(upipe);
 
     srand48((long)&uprobe); // FIXME
-    upipe_srt_handshake->syn_cookie = mrand48();
     upipe_srt_handshake->isn = 0;
     upipe_srt_handshake->remote_socket_id = 0; // will be set with remote first packet
     upipe_srt_handshake->mtu = 1500;
@@ -572,6 +571,7 @@ static int upipe_srt_handshake_check(struct upipe *upipe, struct uref *flow_form
 
     if (upipe_srt_handshake->upump_mgr && !upipe_srt_handshake->upump_timer && !upipe_srt_handshake->listener) {
         upipe_srt_handshake->socket_id = mrand48();
+        upipe_srt_handshake->syn_cookie = 0;
         struct upump *upump =
             upump_alloc_timer(upipe_srt_handshake->upump_mgr,
                               upipe_srt_handshake_timer,
@@ -1014,6 +1014,7 @@ static struct uref *upipe_srt_handshake_handle_hs(struct upipe *upipe, const uin
         timestamp = 0;
         upipe_srt_handshake->remote_socket_id = srt_get_handshake_socket_id(cif);
         upipe_srt_handshake->socket_id = mrand48();
+        upipe_srt_handshake->syn_cookie = mrand48();
 
         struct uref *uref = upipe_srt_handshake_alloc_hs(upipe, 0, timestamp, &out_cif);
         if (!uref)
