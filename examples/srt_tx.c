@@ -104,6 +104,10 @@ static enum uprobe_log_level loglevel = UPROBE_LOG_DEBUG;
 static struct uprobe *logger;
 
 static bool restart = true;
+static bool connected = false;
+static bool drop = false;
+static struct sockaddr_storage connected_addr;
+static socklen_t connected_addr_len = 0;
 
 static size_t packets = 0;
 static const size_t km_refresh_period = 1 << 25;
@@ -150,14 +154,25 @@ static int catch_hs(struct uprobe *uprobe, struct upipe *upipe,
 }
 
 /** definition of our uprobe */
-static int catch_uref(struct uprobe *uprobe, struct upipe *upipe,
+static int catch_uref_in(struct uprobe *uprobe, struct upipe *upipe,
                  int event, va_list args)
 {
-    switch (event) {
-    case UPROBE_PROBE_UREF:
-        UBASE_SIGNATURE_CHECK(args, UPIPE_PROBE_UREF_SIGNATURE);
-        //struct uref *uref = va_arg(args, struct uref *);
+    bool *drop_p;
+    struct uref *uref;
 
+    if (uprobe_probe_uref_check(event, args, &uref, NULL, &drop_p)) {
+        *drop_p = drop;
+        return UBASE_ERR_NONE;
+    }
+
+    return uprobe_throw_next(uprobe, upipe, event, args);
+}
+
+/** definition of our uprobe */
+static int catch_uref_out(struct uprobe *uprobe, struct upipe *upipe,
+                 int event, va_list args)
+{
+    if (uprobe_probe_uref_check(event, args, NULL, NULL, NULL)) {
         if (packets++ == km_refresh_period) {
             packets = 0;
             if (upipe_srt_handshake)
@@ -166,6 +181,7 @@ static int catch_uref(struct uprobe *uprobe, struct upipe *upipe,
 
         return UBASE_ERR_NONE;
     }
+
     return uprobe_throw_next(uprobe, upipe, event, args);
 }
 
@@ -191,7 +207,17 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
 
         char uri[INET6_ADDRSTRLEN+6];
         addr_to_str(s, uri);
-        upipe_warn_va(upipe, "Remote %s", uri);
+
+        if (connected) {
+            drop = (*len != connected_addr_len) || memcmp(&connected_addr, s, connected_addr_len);
+            upipe_warn_va(upipe, "Remote %s %s", uri, drop ? ", ignoring" : "reconnected");
+            return UBASE_ERR_NONE;
+        }
+
+        upipe_warn_va(upipe, "Remote %s connected", uri);
+        connected = true;
+        connected_addr_len = *len;
+        memcpy(&connected_addr, s, *len);
 
         ubase_assert(upipe_udpsrc_get_fd(upipe_udpsrc_srt, &udp_fd));
         ubase_assert(upipe_udpsink_set_fd(upipe_udpsink, dup(udp_fd)));
@@ -231,12 +257,17 @@ static int start(void)
     if (!ubase_check(upipe_set_option(upipe_srt_sender, "latency", latency)))
         return EXIT_FAILURE;
 
+    struct upipe_mgr *upipe_probe_uref_mgr = upipe_probe_uref_mgr_alloc();
     upipe_udpsrc_srt = upipe_void_alloc(upipe_udpsrc_mgr,
             uprobe_pfx_alloc_va(uprobe_alloc(catch_udp, uprobe_use(logger)), loglevel, "udp source srt %u", z));
     upipe_attach_uclock(upipe_udpsrc_srt);
 
+
+    struct upipe *upipe = upipe_void_alloc_output(upipe_udpsrc_srt, upipe_probe_uref_mgr,
+            uprobe_pfx_alloc_va(uprobe_alloc(catch_uref_in, uprobe_use(logger)), loglevel, "probe in %u", z));
+
     struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc((long)&upipe_udpsrc_srt);
-    upipe_srt_handshake = upipe_void_alloc_output(upipe_udpsrc_srt, upipe_srt_handshake_mgr,
+    upipe_srt_handshake = upipe_void_chain_output(upipe, upipe_srt_handshake_mgr,
             uprobe_pfx_alloc_va(uprobe_alloc(catch_hs, uprobe_use(logger)), loglevel, "srt handshake %u", z));
     upipe_set_option(upipe_srt_handshake, "listener", listener ? "1" : "0");
     if (!ubase_check(upipe_set_option(upipe_srt_handshake, "latency", latency)))
@@ -257,9 +288,8 @@ static int start(void)
 
     /* send to udp */
 
-    struct upipe_mgr *upipe_probe_uref_mgr = upipe_probe_uref_mgr_alloc();
-    struct upipe *upipe = upipe_void_chain_output(upipe_srt_sender, upipe_probe_uref_mgr,
-            uprobe_pfx_alloc_va(uprobe_alloc(catch_uref, uprobe_use(logger)), loglevel, "probe %u", z));
+    upipe = upipe_void_chain_output(upipe_srt_sender, upipe_probe_uref_mgr,
+            uprobe_pfx_alloc_va(uprobe_alloc(catch_uref_out, uprobe_use(logger)), loglevel, "probe out %u", z));
 
     struct upipe_mgr *upipe_udpsink_mgr = upipe_udpsink_mgr_alloc();
     upipe_udpsink = upipe_void_chain_output(upipe, upipe_udpsink_mgr,
@@ -317,6 +347,8 @@ static void stop(struct upump *upump)
     upipe_udpsrc = NULL;
 
     upipe_srt_handshake = NULL;
+
+    connected = false;
 
     if (restart)
         start();
