@@ -53,6 +53,7 @@
 #include "upipe-modules/upipe_udp_source.h"
 #include <upipe-modules/upipe_rtp_decaps.h>
 #include "upipe-modules/upipe_udp_sink.h"
+#include "upipe-modules/upipe_probe_uref.h"
 #include "upipe-srt/upipe_srt_handshake.h"
 #include "upipe-srt/upipe_srt_receiver.h"
 #include "upipe/uprobe_helper_uprobe.h"
@@ -175,6 +176,10 @@ static int key_length = 128;
 static char *latency;
 
 static bool restart;
+static bool connected = false;
+static bool drop = false;
+static struct sockaddr_storage connected_addr;
+static socklen_t connected_addr_len = 0;
 
 static struct upipe_mgr *rtpd_mgr;
 
@@ -202,6 +207,20 @@ static void addr_to_str(const struct sockaddr *s, char uri[INET6_ADDRSTRLEN+6])
     sprintf(&uri[uri_len], ":%hu", port);
 }
 
+static int catch_uref(struct uprobe *uprobe, struct upipe *upipe,
+                 int event, va_list args)
+{
+    bool *drop_p;
+    struct uref *uref;
+
+    if (uprobe_probe_uref_check(event, args, &uref, NULL, &drop_p)) {
+        *drop_p = drop;
+        return UBASE_ERR_NONE;
+    }
+
+    return uprobe_throw_next(uprobe, upipe, event, args);
+}
+
 static int start(void)
 {
     bool listener = srcpath && strchr(srcpath, '@');
@@ -209,8 +228,12 @@ static int start(void)
     upipe_udpsrc = upipe_void_alloc(upipe_udpsrc_mgr, &uprobe_udp);
     upipe_mgr_release(upipe_udpsrc_mgr);
 
+    struct upipe_mgr *upipe_probe_uref_mgr = upipe_probe_uref_mgr_alloc();
+    struct upipe *upipe =  upipe_void_alloc_output(upipe_udpsrc, upipe_probe_uref_mgr,
+            uprobe_pfx_alloc(uprobe_alloc(catch_uref, uprobe_use(logger)), loglevel, "probe"));
+
     struct upipe_mgr *upipe_srt_handshake_mgr = upipe_srt_handshake_mgr_alloc((long)&upipe_udpsrc);
-    struct upipe *upipe_srth = upipe_void_alloc_output(upipe_udpsrc,
+    struct upipe *upipe_srth = upipe_void_chain_output(upipe,
             upipe_srt_handshake_mgr, &uprobe_srt);
     assert(upipe_srth);
     upipe_set_option(upipe_srth, "listener", listener ? "1" : "0");
@@ -291,6 +314,8 @@ static void stop(struct upump *upump)
     upipe_release(upipe_udpsrc);
     upipe_release(upipe_srtr_sub);
 
+    connected = false;
+
     if (restart) {
         restart = false;
         start();
@@ -344,7 +369,17 @@ static int catch_udp(struct uprobe *uprobe, struct upipe *upipe,
     char uri[INET6_ADDRSTRLEN+6];
 
     addr_to_str(s, uri);
-    upipe_warn_va(upipe, "Remote %s", uri);
+
+    if (connected) {
+        drop = (*len != connected_addr_len) || memcmp(&connected_addr, s, connected_addr_len);
+        upipe_warn_va(upipe, "Remote %s %s", uri, drop ? ", ignoring" : "reconnected");
+        return UBASE_ERR_NONE;
+    }
+
+    upipe_warn_va(upipe, "Remote %s connected", uri);
+    connected = true;
+    connected_addr_len = *len;
+    memcpy(&connected_addr, s, *len);
 
     int udp_fd;
     ubase_assert(upipe_udpsrc_get_fd(upipe_udpsrc, &udp_fd));
