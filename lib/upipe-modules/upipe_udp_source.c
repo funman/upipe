@@ -28,6 +28,8 @@
  * @short Upipe source module for udp sockets
  */
 
+#define _GNU_SOURCE
+
 #include "upipe/ubase.h"
 #include "upipe/uclock.h"
 #include "upipe/uref.h"
@@ -209,7 +211,7 @@ static void upipe_udpsrc_worker(struct upump *upump)
 
     int ifindex = -1;
 
-    uint8_t ancillary[CMSG_SPACE(sizeof(struct in_pktinfo))];
+    uint8_t ancillary[CMSG_SPACE(sizeof(struct in_pktinfo)) + CMSG_SPACE(sizeof(struct in6_pktinfo))];
     struct iovec iov[1] = {
         {
             .iov_base = buffer,
@@ -233,6 +235,9 @@ static void upipe_udpsrc_worker(struct upump *upump)
         if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO) {
             struct in_pktinfo *info = (void*)CMSG_DATA(c);
             ifindex = info->ipi_ifindex;
+        } else if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_PKTINFO) {
+            struct in6_pktinfo *info = (void*)CMSG_DATA(c);
+            ifindex = info->ipi6_ifindex;
         }
     }
 
