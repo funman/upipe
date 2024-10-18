@@ -28,6 +28,8 @@
  * @short Upipe sink module for udp
  */
 
+#define _GNU_SOURCE
+
 #include "upipe/ubase.h"
 #include "upipe/uclock.h"
 #include "upipe/uref.h"
@@ -55,6 +57,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <netinet/in.h>
+#include <net/if.h>
 
 /** tolerance for late packets */
 #define SYSTIME_TOLERANCE UCLOCK_FREQ
@@ -290,15 +293,39 @@ write_buffer:
             .msg_flags = 0,
         };
 
-        uint8_t ancillary[CMSG_SPACE(sizeof(struct in_pktinfo))];
+        uint8_t ancillary[CMSG_SPACE(sizeof(struct in_pktinfo)) + CMSG_SPACE(sizeof(struct in6_pktinfo))];
+        memset(ancillary, 0, sizeof(ancillary));
         uint64_t ifindex;
         if (ubase_check(uref_block_get_net_ifindex(uref, &ifindex))) {
-            struct in_pktinfo *info = (void*)ancillary;
-            info->ipi_ifindex = ifindex;
-            info->ipi_spec_dst.s_addr = 0,
-            info->ipi_addr.s_addr = 0,
+            char if_str[IF_NAMESIZE];
+            upipe_verbose_va(upipe, "Packet is going to %s", if_indextoname(ifindex, if_str));
+
             msghdr.msg_control = ancillary;
             msghdr.msg_controllen = sizeof(ancillary);
+
+            struct cmsghdr *c = CMSG_FIRSTHDR(&msghdr);
+            if (c) {
+                c->cmsg_level = IPPROTO_IP;
+                c->cmsg_type = IP_PKTINFO;
+                struct in_pktinfo *info = (struct in_pktinfo*) CMSG_DATA(c);
+                info->ipi_ifindex = ifindex;
+                c->cmsg_len = CMSG_LEN(sizeof(*info));
+                c = CMSG_NXTHDR(&msghdr, c);
+            }
+
+            if (c) {
+                c->cmsg_level = IPPROTO_IPV6;
+                c->cmsg_type = IPV6_PKTINFO;
+                struct in6_pktinfo *info = (struct in6_pktinfo*) CMSG_DATA(c);
+                info->ipi6_ifindex = ifindex;
+                struct sockaddr *addr;
+                socklen_t addrlen;
+                if (ubase_check(uref_block_get_net_ipi6_addr(uref, &addr, &addrlen)) &&
+                        addrlen >= sizeof(struct sockaddr_in6) && addr->sa_family == AF_INET6) {
+                        memcpy(&info->ipi6_addr, &((struct sockaddr_in6*)addr)->sin6_addr, sizeof(info->ipi6_addr));
+                }
+                c->cmsg_len = CMSG_LEN(sizeof(*info));
+            }
         }
 
         ssize_t ret = sendmsg(upipe_udpsink->fd, &msghdr, 0);
