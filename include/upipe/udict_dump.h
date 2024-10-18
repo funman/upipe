@@ -70,7 +70,7 @@ static void addr_to_str(const struct sockaddr *addr, socklen_t addrlen, char uri
     }
 
     size_t uri_len = strlen(uri);
-    sprintf(&uri[uri_len], (addr->sa_family == AF_INET6) ? "]:%hu" : ":%hu", port);
+    snprintf(&uri[uri_len], INET6_ADDRSTRLEN+8-uri_len, (addr->sa_family == AF_INET6) ? "]:%hu" : ":%hu", port);
 }
 
 /** @internal @This dumps the content of a udict for debug purposes.
