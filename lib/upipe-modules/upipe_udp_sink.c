@@ -29,6 +29,7 @@
  */
 
 #define _GNU_SOURCE
+#define __APPLE_USE_RFC_3542
 
 #include "upipe/ubase.h"
 #include "upipe/uclock.h"
