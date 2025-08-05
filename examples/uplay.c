@@ -285,7 +285,10 @@ static int catch_uref(struct uprobe *uprobe, struct upipe *upipe,
         va_arg(args, struct uref *);
         struct upump **upump_p = va_arg(args, struct upump **);
         va_arg(args, bool *);
-        upipe_blit_prepare(upipe_blit, upump_p);
+        struct upipe *upipe_blit = NULL;
+        UBASE_RETURN(upipe_get_output(upipe, &upipe_blit));
+        if (upipe_blit->mgr->signature == UPIPE_BLIT_SIGNATURE)
+            upipe_blit_prepare(upipe_blit, upump_p);
         return UBASE_ERR_NONE;
     }
 
