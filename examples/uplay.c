@@ -347,7 +347,6 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
         uprobe_pfx_alloc(uprobe_use(uprobe_main),
                             UPROBE_LOG_VERBOSE, "blit video"));
     assert(upipe_blit);
-    upipe_release(upipe_blit);
     upipe_mgr_release(blit_mgr);
 
     struct upipe_mgr *ffmt_mgr = upipe_ffmt_mgr_alloc();
@@ -365,7 +364,7 @@ static int catch_video(struct uprobe *uprobe, struct upipe *upipe,
         uref_pic_flow_set_vsize(uref, h);
     }
 
-    struct upipe *ffmt = upipe_flow_alloc_output(upipe_blit, ffmt_mgr,
+    struct upipe *ffmt = upipe_flow_chain_output(upipe_blit, ffmt_mgr,
             uprobe_pfx_alloc(uprobe_use(uprobe_main),
                              UPROBE_LOG_VERBOSE, "ffmt"),
             uref);
