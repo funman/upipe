@@ -44,6 +44,9 @@
 #include "upump-ev/upump_ev.h"
 #include "upipe-modules/upipe_pcap_src.h"
 #include "upipe-modules/upipe_null.h"
+#include "upipe-modules/upipe_rtp_anc_unpack.h"
+#include "upipe-modules/upipe_rtp_decaps.h"
+#include "upipe-modules/upipe_vanc_decoder.h"
 
 #define UPROBE_LOG_LEVEL UPROBE_LOG_INFO
 #define UMEM_POOL 512
@@ -103,8 +106,23 @@ int main(int argc, char **argv)
 
     upipe_attach_uclock(upipe_src);
 
+    struct upipe_mgr *upipe_rtpd_mgr = upipe_rtpd_mgr_alloc();
+    struct upipe *upipe = upipe_void_alloc_output(upipe_src, upipe_rtpd_mgr,
+        uprobe_pfx_alloc(uprobe_use(uprobe), UPROBE_LOG_DEBUG, "rtpd"));
+    upipe_mgr_release(upipe_rtpd_mgr);
+
+    struct upipe_mgr *upipe_rtp_anc_unpack_mgr = upipe_rtp_anc_unpack_mgr_alloc();
+    upipe = upipe_void_chain_output(upipe, upipe_rtp_anc_unpack_mgr,
+        uprobe_pfx_alloc(uprobe_use(uprobe), UPROBE_LOG_DEBUG, "rtp_anc_unpack"));
+    upipe_mgr_release(upipe_rtp_anc_unpack_mgr);
+
+    struct upipe_mgr *upipe_vancd_mgr = upipe_vancd_mgr_alloc();
+    upipe = upipe_void_chain_output(upipe, upipe_vancd_mgr,
+        uprobe_pfx_alloc(uprobe_use(uprobe), UPROBE_LOG_DEBUG, "vancd"));
+    upipe_mgr_release(upipe_vancd_mgr);
+
     struct upipe_mgr *upipe_null_mgr = upipe_null_mgr_alloc();
-    struct upipe *upipe = upipe_void_alloc_output(upipe_src, upipe_null_mgr,
+    upipe = upipe_void_chain_output(upipe, upipe_null_mgr,
         uprobe_pfx_alloc(uprobe_use(uprobe), UPROBE_LOG_DEBUG, "null"));
     upipe_mgr_release(upipe_null_mgr);
     upipe_release(upipe);

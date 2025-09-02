@@ -94,4 +94,5 @@ myinclude_HEADERS = \
 	uref_graph.h \
 	upipe_graph.h \
 	upipe_pcap_src.h \
+	upipe_rtp_anc_unpack.h \
 	$(NULL)
